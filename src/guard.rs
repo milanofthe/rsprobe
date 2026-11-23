@@ -227,6 +227,11 @@ impl Handle {
         if cfg!(not(feature = "on")) || self.ctx == 0 || MAX.load(Relaxed) == 0 {
             return Guard::IDLE;
         }
+        self.held()
+    }
+
+    /// [`enter`](Self::enter) where a context is live.
+    fn held(self) -> Guard {
         let held = THREAD.with(|t| {
             let t = &mut *t.borrow_mut();
             let Thread { cur, entries } = t;
