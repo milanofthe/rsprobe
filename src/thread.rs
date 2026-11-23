@@ -100,23 +100,27 @@ impl Entry {
     /// before it on first use.
     #[inline]
     pub(crate) fn base(&mut self, node: u32) -> &Base {
-        while self.nodes.len() <= node as usize {
-            self.grow();
+        match self.nodes.get(node as usize) {
+            // SAFETY: as in `cell`.
+            Some(l) => unsafe { &*l.base },
+            None => self.grow(node),
         }
-        // SAFETY: as in `cell`.
-        unsafe { &*self.nodes[node as usize].base }
     }
 
     #[cold]
-    fn grow(&mut self) {
-        let node = self.nodes.len() as u32;
-        let base = self.cell(|t, b| t.bases.push((node, b)));
-        let (children, extras) = (Vec::new(), Vec::new());
-        self.nodes.push(Local {
-            base,
-            children,
-            extras,
-        });
+    fn grow(&mut self, node: u32) -> &Base {
+        while self.nodes.len() <= node as usize {
+            let n = self.nodes.len() as u32;
+            let base = self.cell(|t, b| t.bases.push((n, b)));
+            let (children, extras) = (Vec::new(), Vec::new());
+            self.nodes.push(Local {
+                base,
+                children,
+                extras,
+            });
+        }
+        // SAFETY: as in `cell`.
+        unsafe { &*self.nodes[node as usize].base }
     }
 
     /// The child of `node` for a scope site, interned on first use.
@@ -141,17 +145,20 @@ impl Entry {
         let local = &self.nodes[node as usize];
         match local.extras.iter().find(|e| e.0 == site) {
             Some(&(_, p)) => p,
-            None => quiet(|| {
-                let p = self.cell(|t, b| t.extras.push((node, site, b)));
-                self.nodes[node as usize].extras.push((site, p));
-                p
-            }),
+            None => quiet(|| self.new_extra(node, site)),
         }
     }
 
-    /// Appends an item to this thread's stream items.
     #[cold]
     #[inline(never)]
+    fn new_extra(&mut self, node: u32, site: u32) -> *const AtomicU64 {
+        let p = self.cell(|t, b| t.extras.push((node, site, b)));
+        self.nodes[node as usize].extras.push((site, p));
+        p
+    }
+
+    /// Appends an item to this thread's stream items.
+    #[inline]
     pub(crate) fn push(&mut self, item: Item) {
         quiet(|| self.items.push(item));
     }
@@ -217,6 +224,18 @@ impl Thread {
     }
 }
 
+impl Thread {
+    /// The current node, the current entry and the site id if `site` is
+    /// active in the current context.
+    #[inline(always)]
+    pub(crate) fn site(&mut self, site: &'static Site) -> Option<(&mut Cur, &mut Entry, u32)> {
+        let Thread { cur, entries } = self;
+        let e = entries.get_mut(cur.entry as usize)?;
+        let id = site.id();
+        e.active(site, id).then_some((cur, e, id))
+    }
+}
+
 impl Site {
     /// Runs `f` on the current node, the current entry and the site id if
     /// this site is active in the current context.
@@ -228,19 +247,19 @@ impl Site {
         if self.level.0 > MAX.load(Relaxed) {
             return None;
         }
-        let f = |cur: &mut Cur, e: &mut Entry| {
-            let id = self.id();
-            e.active(self, id).then(|| f(cur, e, id))
-        };
-        with_current(f).flatten()
+        THREAD.with(|t| {
+            let t = &mut *t.borrow_mut();
+            let (cur, e, id) = t.site(self)?;
+            Some(f(cur, e, id))
+        })
     }
 
     /// Adds `value()` to this site's measure at the current node; what
     /// [`add!`](crate::add) expands to.
     #[inline]
     pub fn add(&'static self, value: impl FnOnce() -> u64) {
-        let cell = self.active(|cur, e, id| (e.extra(cur.node, id), cur.node, id, e.stream));
-        if let Some((c, node, site, stream)) = cell {
+        let cell = self.active(|cur, e, id| (e.stream, cur.node, id, e.extra(cur.node, id)));
+        if let Some((stream, node, site, c)) = cell {
             // The value is evaluated outside the borrow, so it may enter
             // scopes itself.
             let v = value();

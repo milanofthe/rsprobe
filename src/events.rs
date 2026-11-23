@@ -73,20 +73,16 @@ impl Warnings {
     }
 }
 
-/// Emits the event `kind()` at the node and thread of `here`, a context, a
-/// node and a thread index, or nothing for `None`. `kind` is called only then,
-/// outside the thread-local state. The event is kept among the warnings if
+/// Emits the event `kind()` at `node` of `shared` from the thread of index
+/// `thread`. `kind` is called outside the thread-local state. The event is kept among the warnings if
 /// its level is WARN or above, in the stream if there is one, and passed to
 /// every sink. Its allocations, and those of the sinks, are not counted by
 /// [`Alloc`](crate::Alloc).
 pub(crate) fn emit(
-    here: Option<(Arc<Shared>, u32, u32)>,
+    (shared, node, thread): (Arc<Shared>, u32, u32),
     (level, module, file, line): (Level, &'static str, &'static str, u32),
     kind: impl FnOnce() -> Kind,
 ) {
-    let Some((shared, node, thread)) = here else {
-        return;
-    };
     quiet(|| {
         let kind = kind();
         let time = (shared.cfg.clock)();
@@ -122,6 +118,8 @@ impl Site {
     #[inline]
     pub fn event(&'static self, kind: impl FnOnce() -> Kind) {
         let here = self.active(|cur, e, _| (e.shared().clone(), cur.node, e.thread));
-        emit(here, (self.level, self.module, self.file, self.line), kind)
+        if let Some(here) = here {
+            emit(here, (self.level, self.module, self.file, self.line), kind)
+        }
     }
 }

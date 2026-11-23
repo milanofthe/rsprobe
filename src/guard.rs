@@ -2,11 +2,12 @@
 
 use crate::alloc::{counts, quiet, N};
 use crate::context::{Shared, BUSY, BYTES, CALLS, WALL};
-use crate::site::registry;
+use crate::site::{registry, MAX};
 use crate::stream::Item;
-use crate::thread::{bump, with_current, Cur, Thread, IDLE, NONE, THREAD};
+use crate::thread::{bump, with_current, Cur, Entry, Thread, IDLE, NONE, THREAD};
 use crate::Site;
 use std::marker::PhantomData;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
 /// Guard of a scope, of [`Context::enter`](crate::Context::enter) or of
@@ -72,7 +73,14 @@ impl Site {
     /// Enters a scope at this site; what [`scope!`](crate::scope) expands to.
     #[inline]
     pub fn scope(&'static self) -> Guard {
-        let guard = self.active(|cur, e, id| {
+        if self.level.0 > MAX.load(Relaxed) {
+            return Guard::IDLE;
+        }
+        THREAD.with(|t| {
+            let t = &mut *t.borrow_mut();
+            let Some((cur, e, id)) = t.site(self) else {
+                return Guard::IDLE;
+            };
             let prev = *cur;
             cur.node = e.child(prev.node, id);
             Guard {
@@ -84,8 +92,7 @@ impl Site {
                 scope: true,
                 ..Guard::IDLE
             }
-        });
-        guard.unwrap_or(Guard::IDLE)
+        })
     }
 }
 
@@ -112,12 +119,7 @@ impl Drop for Guard {
                 bump(&b[BYTES + k], m.wrapping_sub(self.mem[k]));
             }
             if e.stream {
-                let (node, start) = (self.cur.node, self.start);
-                e.push(Item::Span {
-                    node,
-                    start,
-                    dur: dt,
-                });
+                span(e, self.cur.node, self.start, dt);
             }
             *cur = self.prev;
             if self.scope {
@@ -137,6 +139,13 @@ impl Drop for Guard {
             released
         });
     }
+}
+
+/// Appends a guard's span to this thread's stream items.
+#[cold]
+#[inline(never)]
+fn span(e: &mut Entry, node: u32, start: u64, dur: u64) {
+    e.push(Item::Span { node, start, dur });
 }
 
 /// A node of a context, `Copy`, to be entered on another thread.
