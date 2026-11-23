@@ -6,7 +6,7 @@
 //!     cargo run --release --example bench --features on
 //!     cargo run --release --example bench --features alloc
 
-use rsprobe::{add, debug, info, scope, Alloc, Context, Level};
+use rsprobe::{add, current, debug, info, scope, Alloc, Context, Level};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::time::Instant;
@@ -76,8 +76,18 @@ fn main() {
         return;
     }
     row("scope, no context", time(1, flat));
+    let nothing = current();
+    row(
+        "Handle::enter, no context",
+        time(1, |_| drop(nothing.enter())),
+    );
     let ctx = Context::new();
     let _on = ctx.enter();
+    let h = current();
+    row(
+        "Handle::enter, context on another thread",
+        std::thread::scope(|s| s.spawn(|| time(1, |_| drop(h.enter()))).join().unwrap()),
+    );
     row(
         "scope, below the threshold",
         time(1, |_| {
