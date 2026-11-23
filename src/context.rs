@@ -581,7 +581,11 @@ pub struct Handle {
 
 /// The current node of this thread; a handle to nothing when no context is
 /// current.
+#[inline]
 pub fn current() -> Handle {
+    if cfg!(not(feature = "on")) {
+        return Handle { ctx: 0, node: 0 };
+    }
     THREAD.with(|t| {
         let t = t.borrow();
         match t.entries.get(t.cur.entry as usize) {
@@ -598,7 +602,12 @@ impl Handle {
     /// Makes this node current on this thread until the guard drops. Scopes
     /// entered meanwhile hang under it and add their time to `busy`. Records
     /// nothing if the context has been dropped.
+    #[inline]
     pub fn enter(self) -> Guard {
+        // No context, or the feature absent: nothing to look up.
+        if cfg!(not(feature = "on")) || self.ctx == 0 {
+            return Guard::IDLE;
+        }
         let local = THREAD.with(|t| {
             t.borrow()
                 .entries
