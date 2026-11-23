@@ -80,7 +80,7 @@ pub(crate) fn emit(
     (level, module, file, line): (Level, &'static str, &'static str, u32),
     kind: impl FnOnce() -> Kind,
 ) {
-    let Some((shared, node)) = here(site, level, module) else {
+    let Some((shared, node, thread)) = here(site, level, module) else {
         return;
     };
     crate::alloc::quiet(|| {
@@ -94,13 +94,16 @@ pub(crate) fn emit(
             time: (shared.clock)(),
             kind,
         };
-        send(&shared, &e);
+        send(&shared, thread, &e);
     })
 }
 
-/// Keeps `e` among the warnings if its level is WARN or above, and passes it
-/// to every sink.
-fn send(shared: &Shared, e: &Event) {
+/// Keeps `e` among the warnings if its level is WARN or above, in the stream
+/// if there is one, and passes it to every sink.
+fn send(shared: &Shared, thread: u32, e: &Event) {
+    if let Some(s) = &shared.stream {
+        lock(s).events.push((thread, e.clone()));
+    }
     if e.level <= Level::WARN && matches!(e.kind, Kind::Message(_)) {
         lock(&shared.warnings).add(e);
     }

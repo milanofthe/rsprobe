@@ -77,6 +77,7 @@ mod context;
 mod events;
 mod record;
 mod sinks;
+mod stream;
 
 pub use alloc::Alloc;
 #[cfg(feature = "log")]

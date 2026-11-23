@@ -76,6 +76,14 @@ buffer.drain(|event, path| host_log(event.level.name(), path, &event.kind.to_str
 
 With the feature `log`, `rsprobe::Logger` turns records of the `log` facade into events at the current node, and the sink `rsprobe::LogSink` passes events on to `log`.
 
+A context built with `.stream()` also keeps every scope instance, event and `add!` value with its time; `ctx.trace()` writes them as Chrome trace event JSON, which Perfetto, speedscope and the Firefox Profiler open:
+
+```rust
+let ctx = rsprobe::Context::builder().stream().build();
+// ... the solve ...
+std::fs::write("solve.trace.json", ctx.trace())?;
+```
+
 ## Tool
 
 `tool/` reads records: a Python package, standard library only, Python 3.9+. Run it as `python -m rsprobe <command>` from `tool/`, or install it with `pip install ./tool`. A set of records is a record file or a directory of them; several records of a report are summed.

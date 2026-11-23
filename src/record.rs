@@ -108,7 +108,7 @@ impl Record {
 }
 
 /// A JSON string literal.
-struct Str<'a>(&'a str);
+pub(crate) struct Str<'a>(pub(crate) &'a str);
 
 impl Display for Str<'_> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
