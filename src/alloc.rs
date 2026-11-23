@@ -1,6 +1,7 @@
 //! The counting allocator and this thread's counters.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 
 /// A global allocator that adds to this thread's counters and forwards:
 /// `bytes` and `allocs` on an allocation, `freed` on a free. A reallocation
@@ -40,37 +41,32 @@ impl<A> Alloc<A> {
 /// `alloc`, none without, so that a scope costs what it did before.
 pub(crate) const N: usize = if cfg!(feature = "alloc") { 3 } else { 0 };
 
-#[cfg(feature = "alloc")]
 thread_local! {
     /// This thread's `bytes`, `allocs` and `freed`.
-    static COUNTS: [std::cell::Cell<u64>; 3] = const {
-        [std::cell::Cell::new(0), std::cell::Cell::new(0), std::cell::Cell::new(0)]
-    };
+    static COUNTS: [Cell<u64>; N] = const { [const { Cell::new(0) }; N] };
 }
 
-/// Adds to this thread's counters.
+/// Adds `bytes`, `allocs` and `freed` to this thread's counters.
 #[inline]
-fn count(bytes: usize, allocs: u64, freed: usize) {
-    #[cfg(feature = "alloc")]
-    let _ = COUNTS.try_with(|c| {
-        c[0].set(c[0].get().wrapping_add(bytes as u64));
-        c[1].set(c[1].get().wrapping_add(allocs));
-        c[2].set(c[2].get().wrapping_add(freed as u64));
-    });
-    #[cfg(not(feature = "alloc"))]
-    let _ = (bytes, allocs, freed);
+fn count(add: [u64; 3]) {
+    if cfg!(feature = "alloc") {
+        let _ = COUNTS.try_with(|c| {
+            for (c, v) in c.iter().zip(add) {
+                c.set(c.get().wrapping_add(v));
+            }
+        });
+    }
 }
 
 /// This thread's `bytes`, `allocs` and `freed`; zeros where no [`Alloc`] is
 /// installed.
 #[inline]
 pub(crate) fn counts() -> [u64; N] {
-    #[cfg(feature = "alloc")]
-    return COUNTS
-        .try_with(|c| [c[0].get(), c[1].get(), c[2].get()])
-        .unwrap_or_default();
-    #[cfg(not(feature = "alloc"))]
-    [0; N]
+    if !cfg!(feature = "alloc") {
+        return [0; N];
+    }
+    let counts = COUNTS.try_with(|c| c.each_ref().map(Cell::get));
+    counts.unwrap_or([0; N])
 }
 
 /// Runs `f` and resets this thread's counters to their values before it: the
@@ -78,10 +74,9 @@ pub(crate) fn counts() -> [u64; N] {
 pub(crate) fn quiet<T>(f: impl FnOnce() -> T) -> T {
     let before = counts();
     let r = f();
-    #[cfg(feature = "alloc")]
-    let _ = COUNTS.try_with(|c| c.iter().zip(before).for_each(|(c, v)| c.set(v)));
-    #[cfg(not(feature = "alloc"))]
-    let _ = before;
+    if cfg!(feature = "alloc") {
+        let _ = COUNTS.try_with(|c| c.iter().zip(before).for_each(|(c, v)| c.set(v)));
+    }
     r
 }
 
@@ -90,7 +85,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Alloc<A> {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
         let p = self.0.alloc(l);
         if !p.is_null() {
-            count(l.size(), 1, 0);
+            count([l.size() as u64, 1, 0]);
         }
         p
     }
@@ -99,7 +94,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Alloc<A> {
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
         let p = self.0.alloc_zeroed(l);
         if !p.is_null() {
-            count(l.size(), 1, 0);
+            count([l.size() as u64, 1, 0]);
         }
         p
     }
@@ -107,14 +102,14 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Alloc<A> {
     #[inline]
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         self.0.dealloc(p, l);
-        count(0, 0, l.size());
+        count([0, 0, l.size() as u64]);
     }
 
     #[inline]
     unsafe fn realloc(&self, p: *mut u8, l: Layout, size: usize) -> *mut u8 {
         let q = self.0.realloc(p, l, size);
         if !q.is_null() {
-            count(size, 1, l.size());
+            count([size as u64, 1, l.size() as u64]);
         }
         q
     }
