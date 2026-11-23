@@ -71,6 +71,9 @@ class RoundTrip(unittest.TestCase):
             (("pairs", "task"), "differences", 1000 ** 2, 1500 ** 2)])
         self.assertEqual(c["nondeterministic"], [])
         self.assertEqual(c["structure"], [])
+        # the caller's wait, a time the program adds: compared with an
+        # interval, never as an exact difference
+        self.assertIn((("pairs",), "join"), [r[:2] for r in c["noisy"]])
         code, out = run("compare", self.sets[1000, 2], self.sets[1500, 2])
         self.assertIn(code, (0, 1))
         self.assertIn("nonzeros     1000 -> 1500", out)

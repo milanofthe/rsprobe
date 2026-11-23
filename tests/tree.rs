@@ -1,7 +1,7 @@
 //! Tree structure, threads and handles, the threshold and the record.
 #![cfg(feature = "on")]
 
-use rsprobe::{add, current, scope, Context, Param};
+use rsprobe::{add, current, scope, time, Context, Param};
 
 fn leaf() {
     let _s = scope!("leaf");
@@ -69,6 +69,29 @@ fn threads_and_handles_sum_under_their_node() {
     assert_eq!(leaf.get("items"), 82);
     assert_eq!(r.nodes.len(), 3);
     assert_eq!(r.threads, 5);
+}
+
+#[test]
+fn a_time_is_a_noisy_measure_summed_as_a_count() {
+    let ctx = Context::new();
+    {
+        let _on = ctx.enter();
+        let _s = scope!("a");
+        for ns in [100, 250] {
+            time!("wait", ns);
+        }
+        time!(DEBUG, "fine", 1);
+        add!("items", 2);
+    }
+    let r = ctx.record();
+    assert_eq!(r.nodes[r.find(&["a"]).unwrap() as usize].get("wait"), 350);
+    let kind = |m: &str| r.measures.iter().find(|x| x.0 == m).map(|x| x.1);
+    assert_eq!(
+        (kind("wait"), kind("items"), kind("fine")),
+        (Some(false), Some(true), None)
+    );
+    let v: serde_json::Value = serde_json::from_str(&r.to_string()).unwrap();
+    assert_eq!(v["measures"]["wait"], "noisy");
 }
 
 #[test]

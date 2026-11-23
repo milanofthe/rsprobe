@@ -15,7 +15,7 @@ NODES = {
     (): {"wall": 10000},
     ("solve",): {"calls": 2, "wall": 8000},
     ("solve", "it"): {"calls": 10, "wall": 5000, "iterations": 10},
-    ("par",): {"calls": 1, "wall": 1000, "busy": 3600},
+    ("par",): {"calls": 1, "wall": 1000, "busy": 3600, "wait": 198},
     ("par", "task"): {"calls": 4, "busy": 3500, "nnz": 700},
 }
 
@@ -39,7 +39,8 @@ EXPECTED = {
 class Report(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        self.runs = load_set([write(self.dir.name, "r.json", NODES, 10, 5)])
+        self.runs = load_set([write(self.dir.name, "r.json", NODES, 10, 5,
+                                    noisy=("wait",))])
 
     def tearDown(self):
         self.dir.cleanup()
@@ -64,7 +65,11 @@ class Report(unittest.TestCase):
         got = {tuple(r["path"]): r["ratios"] for r in rows}
         self.assertEqual(got[("solve", "it")], {"ns/iterations": 490})
         self.assertEqual(got[("par", "task")], {"ns/nnz": 3460 / 700})
-        self.assertEqual(got[("par",)], {"busy/wall": 3540 / 990})
+        # a noisy measure is a time: its share of the node's, not per unit
+        self.assertEqual(got[("par",)], {"wait/wall": 198 / 990,
+                                         "busy/wall": 3540 / 990})
+        line = [x for x in report.text(self.runs).splitlines() if "par" in x][0]
+        self.assertIn("wait 0.000 ms", line)
 
     def test_records_are_summed(self):
         rows, run = report.rows(self.runs * 3)

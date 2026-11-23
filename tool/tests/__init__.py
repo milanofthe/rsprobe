@@ -5,15 +5,18 @@ import json
 import os
 
 
-def write(directory, file, nodes, inner=0.0, outer=0.0, params=None):
+def write(directory, file, nodes, inner=0.0, outer=0.0, params=None,
+          noisy=()):
     """Writes a record built by hand: nodes as {path tuple: {measure:
-    value}}, the root () included; every measure but wall and busy is
-    declared exact, as the crate declares the measures added by `add!`."""
+    value}}, the root () included; wall, busy and the measures in noisy are
+    declared noisy (as the crate declares those added by `time!`), every
+    other one exact (`add!`)."""
     paths = sorted(nodes, key=len)
     names = sorted({p[-1] for p in paths if p})
     site = {n: i for i, n in enumerate(names)}
     ids = {p: i for i, p in enumerate(paths)}
     measures = {"calls": "exact", "wall": "noisy", "busy": "noisy"}
+    measures.update((m, "noisy") for m in noisy)
     for v in nodes.values():
         for m in v:
             measures.setdefault(m, "exact")
