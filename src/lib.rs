@@ -50,7 +50,8 @@
 //! # Sequence of a scope or an `add!`
 //!
 //! 1. One relaxed load of a global atomic, the highest threshold of all live
-//!    contexts. A site above it returns here; nothing else is touched.
+//!    contexts. A site above it returns here; nothing else is touched. With
+//!    no live context, [`current`] and [`Handle::enter`] return here too.
 //! 2. The thread-local state: no current context returns here.
 //! 3. The site id: one relaxed load of the site's static, registered under a
 //!    lock on the first use in the process.
@@ -195,6 +196,20 @@ macro_rules! time {
             { $crate::site!($level, $name, noisy).add(|| $ns as u64) }
             { if false { let _ = $ns; } }
         )
+    };
+}
+
+/// Whether a site at level INFO (`active!()`) or at a given level
+/// (`active!(DEBUG)`) is active on this thread now, at the cost of the site
+/// itself: a caller reads a clock for a [`time!`] value only when it records.
+/// Without the feature `on`: `false`.
+#[macro_export]
+macro_rules! active {
+    () => {
+        $crate::active!(INFO)
+    };
+    ($level:ident) => {
+        $crate::on_or!({ $crate::site!($level, "").is_active() } { false })
     };
 }
 

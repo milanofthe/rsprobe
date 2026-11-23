@@ -9,7 +9,7 @@ use crate::thread::{Base, NONE, THREAD};
 use crate::{Guard, Level, Sink};
 use std::collections::BTreeMap;
 use std::fmt::{self, Write};
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 
 /// A clock: nanoseconds since an arbitrary fixed origin, non-decreasing.
@@ -46,6 +46,8 @@ pub fn now() -> u64 {
 /// Shared by a context, its guards and the threads that entered it.
 pub(crate) struct Shared {
     pub(crate) id: u64,
+    /// Set when the [`Context`] drops.
+    pub(crate) closed: AtomicBool,
     pub(crate) cfg: Builder,
     pub(crate) tree: Mutex<Tree>,
     pub(crate) warnings: Mutex<Warnings>,
@@ -123,12 +125,6 @@ impl Shared {
     }
 }
 
-impl Drop for Shared {
-    fn drop(&mut self) {
-        registry().remove(self.id);
-    }
-}
-
 /// The settings of a context, fixed when it is built: threshold, filters,
 /// clock and sinks.
 pub struct Builder {
@@ -183,6 +179,7 @@ impl Builder {
         let max = max.fold(self.threshold, Level::max);
         let shared = Arc::new(Shared {
             id,
+            closed: AtomicBool::new(false),
             stream: self.stream.then(Mutex::default),
             cfg: self,
             tree: Mutex::new(Tree {
@@ -204,6 +201,15 @@ impl Builder {
 /// its parameters and the calibration constants.
 pub struct Context {
     shared: Arc<Shared>,
+}
+
+impl Drop for Context {
+    /// Unregisters the context; threads still holding it record nothing more
+    /// in it and let it go when they next enter a context.
+    fn drop(&mut self) {
+        self.shared.closed.store(true, Relaxed);
+        registry().remove(self.shared.id);
+    }
 }
 
 impl Default for Context {

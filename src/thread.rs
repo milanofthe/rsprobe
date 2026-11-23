@@ -253,6 +253,13 @@ impl Site {
         })
     }
 
+    /// Whether this site is active on this thread now; what
+    /// [`active!`](crate::active) expands to.
+    #[inline]
+    pub fn is_active(&'static self) -> bool {
+        self.active(|_, _, _| ()).is_some()
+    }
+
     /// Adds `value()` to this site's measure at the current node; what
     /// [`add!`](crate::add) expands to.
     #[inline]
