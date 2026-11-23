@@ -1,10 +1,13 @@
-//! Nanoseconds per scope and per `add!`, the median of rounds, next to the
+//! Nanoseconds per scope, per `add!` and per allocation and free with and
+//! without the counting allocator, the median of rounds, next to the
 //! calibration constants of a context.
 //!
 //!     cargo run --release --example bench                 # feature off
 //!     cargo run --release --example bench --features on
+//!     cargo run --release --example bench --features alloc
 
-use rsprobe::{add, scope, Context, Level};
+use rsprobe::{add, scope, Alloc, Context, Level};
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -12,6 +15,9 @@ use std::time::Instant;
 const ROUNDS: usize = 21;
 /// Iterations per round: about 1 to 5 ms per round at the measured costs.
 const N: u32 = 100_000;
+
+#[global_allocator]
+static A: Alloc = Alloc::new();
 
 /// Median over rounds of the time per call of `f`, in ns.
 fn time(per: u32, f: impl Fn(u32)) -> f64 {
@@ -43,8 +49,27 @@ fn nested(_: u32) {
     let _d = scope!("n4");
 }
 
+/// An allocation and a free of `size` bytes through `a`.
+fn alloc_free(a: &impl GlobalAlloc, size: usize) {
+    let l = Layout::from_size_align(size, 8).unwrap();
+    // SAFETY: a non-zero size; the block is freed with its layout.
+    unsafe { a.dealloc(black_box(a.alloc(l)), l) }
+}
+
 fn main() {
     println!("{:<40} {:>8}", "case", "ns");
+    // Warm-up: the first case timed is otherwise 1 to 3 ns slower.
+    time(1, |_| alloc_free(&System, 16));
+    for size in [16, 65536] {
+        row(
+            &format!("alloc+free {size} B, System"),
+            time(1, |_| alloc_free(&System, size)),
+        );
+        row(
+            &format!("alloc+free {size} B, Alloc"),
+            time(1, |_| alloc_free(&A, size)),
+        );
+    }
     if cfg!(not(feature = "on")) {
         row("scope, feature off", time(1, flat));
         row("add!, feature off", time(1, |i| add!("n", i)));

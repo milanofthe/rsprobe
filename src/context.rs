@@ -1,5 +1,6 @@
 //! The context, the thread-local state and the guards.
 
+use crate::alloc::{counts, quiet, N};
 use crate::record::{Calibration, Node, Param, Record};
 use crate::{Level, Site};
 use std::cell::RefCell;
@@ -14,14 +15,24 @@ pub type Clock = fn() -> u64;
 /// Marks no entry, no parent, no site.
 const NONE: u32 = u32::MAX;
 
-/// Built-in measures; user measures follow with ids from 3.
-const BUILTIN: [(&str, bool); 3] = [("calls", true), ("wall", false), ("busy", false)];
+/// Built-in measures; user measures follow with ids from 6. The last three
+/// are the counters of [`Alloc`](crate::Alloc), omitted from a record where
+/// they are zero at every node.
+const BUILTIN: [(&str, bool); 6] = [
+    ("calls", true),
+    ("wall", false),
+    ("busy", false),
+    ("bytes", true),
+    ("allocs", true),
+    ("freed", true),
+];
 const CALLS: usize = 0;
 const WALL: usize = 1;
 const BUSY: usize = 2;
+const BYTES: usize = 3;
 
-/// One thread's `calls`, `wall` and `busy` of one node.
-type Base = [AtomicU64; 3];
+/// One thread's built-in measures of one node.
+type Base = [AtomicU64; 6];
 
 /// Process-wide: the call sites, the user measures and the live contexts.
 struct Registry {
@@ -197,6 +208,11 @@ impl Entry {
         if let Some(&(_, c)) = local.children.iter().find(|c| c.0 == site) {
             return c;
         }
+        quiet(|| self.intern(node, site))
+    }
+
+    #[cold]
+    fn intern(&mut self, node: u32, site: u32) -> u32 {
         let c = {
             let mut t = lock(&self.shared().tree);
             let next = t.keys.len() as u32;
@@ -216,13 +232,13 @@ impl Entry {
         let local = &self.nodes[node as usize];
         let p = match local.extras.iter().find(|e| e.0 == measure) {
             Some(&(_, p)) => p,
-            None => {
+            None => quiet(|| {
                 let b = Box::<AtomicU64>::default();
                 let p: *const AtomicU64 = &*b;
                 lock(&self.shared().tree).extras.push((node, measure, b));
                 self.nodes[node as usize].extras.push((measure, p));
                 p
-            }
+            }),
         };
         // SAFETY: as in `base`.
         unsafe { &*p }
@@ -286,6 +302,7 @@ impl Site {
                 cur: t.cur,
                 prev,
                 start,
+                mem: counts(),
                 scope: true,
                 _thread: PhantomData,
             }
@@ -327,6 +344,8 @@ pub struct Guard {
     cur: Cur,
     prev: Cur,
     start: u64,
+    /// This thread's allocation counters at entry.
+    mem: [u64; N],
     scope: bool,
     _thread: PhantomData<*const ()>,
 }
@@ -337,11 +356,19 @@ impl Guard {
         cur: IDLE,
         prev: IDLE,
         start: 0,
+        mem: [0; N],
         scope: false,
         _thread: PhantomData,
     };
 
+    /// The allocations of a thread's first entry are not counted.
     fn enter(shared: Arc<Shared>, node: u32, busy: bool) -> Guard {
+        let mut g = quiet(|| Guard::begin(shared, node, busy));
+        g.mem = counts();
+        g
+    }
+
+    fn begin(shared: Arc<Shared>, node: u32, busy: bool) -> Guard {
         THREAD.with(|t| {
             let t = &mut *t.borrow_mut();
             let i = t.entry(&shared);
@@ -360,6 +387,7 @@ impl Guard {
                 cur,
                 prev,
                 start: (e.clock)(),
+                mem: [0; N],
                 scope: false,
                 _thread: PhantomData,
             }
@@ -373,6 +401,7 @@ impl Drop for Guard {
         if self.cur.entry == NONE {
             return;
         }
+        let mem = counts();
         let released = THREAD.with(|t| {
             let t = &mut *t.borrow_mut();
             // A scope that outlives the guard of its context records nothing.
@@ -384,6 +413,9 @@ impl Drop for Guard {
             let b = e.base(self.cur.node);
             bump(&b[CALLS], self.scope as u64);
             bump(&b[if self.cur.busy { BUSY } else { WALL }], dt);
+            for (k, m) in mem.iter().enumerate() {
+                bump(&b[BYTES + k], m.wrapping_sub(self.mem[k]));
+            }
             t.cur = self.prev;
             if self.scope {
                 return None;
@@ -502,7 +534,7 @@ impl Context {
     /// the processor in the state the run left it in.
     pub fn record(&self) -> Record {
         #[cfg(feature = "on")]
-        let calibration = calibrate(self.shared.clock);
+        let calibration = quiet(|| calibrate(self.shared.clock));
         #[cfg(not(feature = "on"))]
         let calibration = Calibration::default();
         self.sums(calibration)
@@ -538,6 +570,15 @@ impl Context {
                 measures.push((name, true));
             }
         }
+        let unused: Vec<&str> = BUILTIN[BYTES..]
+            .iter()
+            .map(|m| m.0)
+            .filter(|&m| nodes.iter().all(|n| n.get(m) == 0))
+            .collect();
+        for n in &mut nodes {
+            n.values.retain(|v| !unused.contains(&v.0));
+        }
+        measures.retain(|m| !unused.contains(&m.0));
         let mut sites: Vec<u32> = t.keys[1..].iter().map(|k| k.1).collect();
         sites.sort_unstable();
         sites.dedup();

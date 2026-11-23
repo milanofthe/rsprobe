@@ -2,8 +2,9 @@
 //!
 //! A [`Context`] belongs to one problem. Scopes entered while it is current
 //! form a tree of nodes keyed by (parent node, call site); every node holds
-//! additive `u64` measures: `calls`, `wall` and `busy` in nanoseconds, and the
-//! counts added with [`add!`]. [`Context::record`] sums the threads and
+//! additive `u64` measures: `calls`, `wall` and `busy` in nanoseconds, the
+//! counts added with [`add!`] and, with the feature `alloc` where the binary
+//! installs [`Alloc`], `bytes`, `allocs` and `freed`. [`Context::record`] sums the threads and
 //! returns a [`Record`] that writes itself as JSON.
 //!
 //! ```
@@ -29,6 +30,15 @@
 //! adds to `wall`, on a thread entered through a handle to `busy`; the handle
 //! guard's own span adds to `busy` of the handle's node.
 //!
+//! # Memory
+//!
+//! With the feature `alloc` every guard reads this thread's [`Alloc`] counters
+//! on entry and on exit and adds the differences to its node, inclusive like
+//! time. Without it a guard carries no counters: they cost 1.5 to 7 ns per
+//! scope on x86-64 (examples/bench.rs). The allocations of
+//! rsprobe itself (a node's first use on a thread, the calibration) are not
+//! counted.
+//!
 //! # Sequence of a scope or an `add!`
 //!
 //! 1. One relaxed load of a global atomic, the highest threshold of all live
@@ -50,9 +60,11 @@
 
 #![warn(missing_docs)]
 
+mod alloc;
 mod context;
 mod record;
 
+pub use alloc::Alloc;
 pub use context::{current, now, Clock, Context, Guard, Handle};
 pub use record::{Calibration, Node, Param, Record};
 
@@ -134,7 +146,7 @@ impl Site {
     /// The id, registered on first use as a scope site or a measure.
     fn id(&'static self, measure: bool) -> u32 {
         match self.id.load(Relaxed) {
-            0 => context::register(self, measure),
+            0 => alloc::quiet(|| context::register(self, measure)),
             id => id - 1,
         }
     }
