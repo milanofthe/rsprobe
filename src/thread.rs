@@ -228,12 +228,11 @@ impl Site {
         if self.level.0 > MAX.load(Relaxed) {
             return None;
         }
-        THREAD.with(|t| {
-            let Thread { cur, entries } = &mut *t.borrow_mut();
-            let e = entries.get_mut(cur.entry as usize)?;
+        let f = |cur: &mut Cur, e: &mut Entry| {
             let id = self.id();
             e.active(self, id).then(|| f(cur, e, id))
-        })
+        };
+        with_current(f).flatten()
     }
 
     /// Adds `value()` to this site's measure at the current node; what
@@ -271,10 +270,10 @@ fn count(site: u32, node: u32, value: u64) {
 }
 
 /// Runs `f` on the current node and entry if a context is current.
-#[inline]
-pub(crate) fn with_current<R>(f: impl FnOnce(Cur, &mut Entry) -> R) -> Option<R> {
+#[inline(always)]
+pub(crate) fn with_current<R>(f: impl FnOnce(&mut Cur, &mut Entry) -> R) -> Option<R> {
     THREAD.with(|t| {
         let Thread { cur, entries } = &mut *t.borrow_mut();
-        Some(f(*cur, entries.get_mut(cur.entry as usize)?))
+        Some(f(cur, entries.get_mut(cur.entry as usize)?))
     })
 }
