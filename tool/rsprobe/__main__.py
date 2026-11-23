@@ -18,6 +18,10 @@ def parser():
     form.add_argument("--folded", action="store_true",
                       help="folded stacks of self time (flame graph input)")
     form.add_argument("--json", action="store_true")
+    r.add_argument("--ratio", action="append", default=[],
+                   type=report.asked_ratio, metavar="A/B",
+                   help="measure A over measure B per node, e.g. "
+                   "width/sections; repeatable")
     c = sub.add_parser("compare", help="two sets of records; exit 1 when a "
                        "node fails the gate")
     c.add_argument("a", help="set A: a record file or a directory")
@@ -29,6 +33,9 @@ def parser():
                    help="run A a second time per round, for the noise band")
     a.add_argument("--out", help="directory for the records (default: a new "
                    "temporary one)")
+    a.add_argument("--case", action="append", default=[], type=ab.case,
+                   metavar="NAME=ARGS", help="a configuration: ARGS appended "
+                   "to both commands; repeatable, one table across them")
     a.add_argument("cmd", nargs=argparse.REMAINDER,
                    help="-- CMD_A :: CMD_B")
     s = sub.add_parser("scale", help="records over a run parameter: a fit "
@@ -47,9 +54,11 @@ def main(argv=None):
     try:
         if args.command == "report":
             runs = load_set(args.records)
-            form = (report.folded if args.folded else
-                    report.as_json if args.json else report.text)
-            print(form(runs))
+            if args.folded:
+                print(report.folded(runs))
+            else:
+                form = report.as_json if args.json else report.text
+                print(form(runs, args.ratio))
             return 0
         if args.command == "scale":
             form = scale.text_threads if args.threads else scale.text
@@ -57,11 +66,15 @@ def main(argv=None):
             return 0
         if args.command == "ab":
             cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd
-            args.a, args.b, args.aa = ab.run(args.rounds, cmd, args.aa, args.out)
-        c = compare.compare(load_set([args.a]), load_set([args.b]),
-                            load_set([args.aa]) if args.aa else None)
-        print(compare.text(c))
-        return 1 if c["gate"] else 0
+            sets = ab.run(args.rounds, cmd, args.aa, args.out, args.case)
+        else:
+            sets = {"": (args.a, args.b, args.aa)}
+        cs = [(n, compare.compare(load_set([a]), load_set([b]),
+                                  load_set([aa]) if aa else None))
+              for n, (a, b, aa) in sets.items()]
+        print(compare.table(cs) if args.command == "ab" and args.case
+              else compare.text(cs[0][1]))
+        return 1 if any(c["gate"] for _, c in cs) else 0
     except (OSError, ValueError, KeyError) as e:
         print("rsprobe: %s" % e, file=sys.stderr)
         return 2
