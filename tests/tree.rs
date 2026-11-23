@@ -144,3 +144,18 @@ fn calibration_is_timed() {
     let c = Context::new().record().calibration;
     assert!(c.inner_ns + c.outer_ns > 0.0, "{c:?}");
 }
+
+#[test]
+fn a_scope_outliving_its_context_records_nothing() {
+    let a = Context::new();
+    let on = a.enter();
+    let stale = scope!("stale");
+    drop(on);
+    drop(a);
+    let b = Context::new();
+    let _on = b.enter();
+    drop(stale);
+    let r = b.record();
+    assert_eq!(r.nodes.len(), 1);
+    assert_eq!(r.nodes[0].get("calls"), 0);
+}

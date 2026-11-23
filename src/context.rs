@@ -92,7 +92,6 @@ struct Shared {
     id: u64,
     threshold: Level,
     clock: Clock,
-    calibration: Calibration,
     tree: Mutex<Tree>,
 }
 
@@ -280,9 +279,10 @@ impl Site {
                 return Guard::IDLE;
             };
             let node = e.child(prev.node, self.id(false));
-            let start = (e.clock)();
+            let (ctx, start) = (e.id, (e.clock)());
             t.cur.node = node;
             Guard {
+                ctx,
                 cur: t.cur,
                 prev,
                 start,
@@ -322,6 +322,8 @@ impl Site {
 /// (through a handle) of that node, and for a scope one call.
 #[must_use]
 pub struct Guard {
+    /// Id of the context the guard belongs to.
+    ctx: u64,
     cur: Cur,
     prev: Cur,
     start: u64,
@@ -331,6 +333,7 @@ pub struct Guard {
 
 impl Guard {
     const IDLE: Guard = Guard {
+        ctx: 0,
         cur: IDLE,
         prev: IDLE,
         start: 0,
@@ -353,6 +356,7 @@ impl Guard {
             };
             let prev = std::mem::replace(&mut t.cur, cur);
             Guard {
+                ctx: e.id,
                 cur,
                 prev,
                 start: (e.clock)(),
@@ -372,10 +376,10 @@ impl Drop for Guard {
         let released = THREAD.with(|t| {
             let t = &mut *t.borrow_mut();
             // A scope that outlives the guard of its context records nothing.
-            if self.scope && t.cur.entry != self.cur.entry {
+            let e = &mut t.entries[self.cur.entry as usize];
+            if self.scope && (t.cur.entry != self.cur.entry || e.id != self.ctx) {
                 return None;
             }
-            let e = &mut t.entries[self.cur.entry as usize];
             let dt = (e.clock)().saturating_sub(self.start);
             let b = e.base(self.cur.node);
             bump(&b[CALLS], self.scope as u64);
@@ -455,17 +459,8 @@ impl Context {
         Context::with(Level::INFO, now)
     }
 
-    /// A context with a threshold and a clock. With the feature `on` the
-    /// scope cost is calibrated with that clock first.
+    /// A context with a threshold and a clock.
     pub fn with(threshold: Level, clock: Clock) -> Context {
-        #[cfg(feature = "on")]
-        let calibration = calibrate(clock);
-        #[cfg(not(feature = "on"))]
-        let calibration = Calibration::default();
-        Context::build(threshold, clock, calibration)
-    }
-
-    fn build(threshold: Level, clock: Clock, calibration: Calibration) -> Context {
         let mut r = lock(&REGISTRY);
         let id = r.next;
         r.next += 1;
@@ -473,7 +468,6 @@ impl Context {
             id,
             threshold,
             clock,
-            calibration,
             tree: Mutex::new(Tree {
                 keys: vec![(NONE, NONE)],
                 index: BTreeMap::new(),
@@ -503,8 +497,19 @@ impl Context {
     }
 
     /// The tree with every thread's values summed per node and measure. Spans
-    /// of guards and scopes still open are not included.
+    /// of guards and scopes still open are not included. With the feature
+    /// `on` the scope cost is calibrated here, with this context's clock and
+    /// the processor in the state the run left it in.
     pub fn record(&self) -> Record {
+        #[cfg(feature = "on")]
+        let calibration = calibrate(self.shared.clock);
+        #[cfg(not(feature = "on"))]
+        let calibration = Calibration::default();
+        self.sums(calibration)
+    }
+
+    /// [`record`](Self::record) with the given calibration constants.
+    fn sums(&self, calibration: Calibration) -> Record {
         let t = lock(&self.shared.tree);
         let r = lock(&REGISTRY);
         let mut nodes: Vec<Node> = t
@@ -538,7 +543,7 @@ impl Context {
         sites.dedup();
         Record {
             params: t.params.clone(),
-            calibration: self.shared.calibration,
+            calibration,
             threads: t.threads,
             measures,
             sites: sites
@@ -555,7 +560,7 @@ impl Context {
 /// that (outer).
 #[cfg(feature = "on")]
 fn calibrate(clock: Clock) -> Calibration {
-    let ctx = Context::build(Level::TRACE, clock, Calibration::default());
+    let ctx = Context::with(Level::TRACE, clock);
     let _on = ctx.enter();
     let mut walls = [(0, 0); 2];
     for w in &mut walls {
@@ -565,7 +570,7 @@ fn calibrate(clock: Clock) -> Calibration {
                 let _s = crate::scope!(ERROR, "empty");
             }
         }
-        let r = ctx.record();
+        let r = ctx.sums(Calibration::default());
         *w = (r.nodes[1].get("wall"), r.nodes[2].get("wall"));
     }
     let n = crate::CALIBRATION_SCOPES as f64;
