@@ -1,6 +1,7 @@
 //! A small nested workload over a problem size and a thread count. It writes
-//! its record to the file named by `RSPROBE_RECORD`, else to stdout; the tool's
-//! round-trip tests read it, with each thread's values.
+//! its record to the file named by `RSPROBE_RECORD`, else to stdout, and with
+//! `RSPROBE_TRACE` set its stream as a trace to that file; the tool's
+//! round-trip tests read both, the record with each thread's values.
 //!
 //!     cargo run --example workload --features on -- N THREADS
 
@@ -73,7 +74,11 @@ fn main() {
         .map(|a| a.parse::<usize>().expect("arguments: N THREADS"));
     let n = args.next().unwrap_or(N);
     let threads = args.next().unwrap_or(THREADS);
-    let ctx = Context::new();
+    let trace = std::env::var_os("RSPROBE_TRACE");
+    let ctx = match trace {
+        Some(_) => Context::builder().stream().build(),
+        None => Context::new(),
+    };
     ctx.param("n", n);
     ctx.param("threads", threads);
     {
@@ -82,6 +87,9 @@ fn main() {
         sort(&mut v);
         black_box(solve(&v));
         black_box(pairs(&v, threads));
+    }
+    if let Some(path) = trace {
+        std::fs::write(path, ctx.trace()).expect("writing the trace");
     }
     let record = ctx.record_threads().to_string();
     match std::env::var_os("RSPROBE_RECORD") {

@@ -289,9 +289,9 @@ impl Context {
 
     /// The stream as Chrome trace event JSON, as read by Perfetto, speedscope
     /// and the Firefox Profiler: per thread an "M" event, per guard span an
-    /// "X" event named by its scope (`root` for the root), per event an "i"
-    /// event, per `add!` a "C" event. Times in microseconds of the context's
-    /// clock. Includes what this thread has recorded so far and what other
+    /// "X" event named by its scope (`root` for the root) with its node and the
+    /// node's parent, per event an "i" event, per `add!` a "C" event. Times in
+    /// microseconds of the context's clock. Includes what this thread has recorded so far and what other
     /// threads have recorded up to the drop of their outermost guard. Empty
     /// without [`Builder::stream`].
     pub fn trace(&self) -> String {
@@ -304,7 +304,8 @@ impl Context {
             e.map(|e| e.flush())
         });
         let (s, t, r) = (lock(stream), lock(&self.shared.tree), registry());
-        s.write(|n| t.name(&r, n), |m| r.name(m))
+        let parent = |n: u32| Some(t.keys[n as usize].0).filter(|&p| p != NONE);
+        s.write(|n| t.name(&r, n), parent, |m| r.name(m))
     }
 
     /// [`record`](Self::record) with the given calibration constants, and

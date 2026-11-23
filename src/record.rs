@@ -158,7 +158,7 @@ impl Display for Num {
 }
 
 /// `null` or the number.
-fn opt(v: Option<u32>) -> String {
+pub(crate) fn opt(v: Option<u32>) -> String {
     v.map_or("null".into(), |v| v.to_string())
 }
 

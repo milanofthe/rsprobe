@@ -1,7 +1,7 @@
 //! The event stream: scope instances, events and `add!` values as Chrome
 //! trace events.
 
-use crate::record::Str;
+use crate::record::{opt, Str};
 use crate::Event;
 use std::fmt::{self, Display, Formatter};
 
@@ -36,12 +36,14 @@ impl Display for Us {
 }
 
 impl Stream {
-    /// The Chrome trace event JSON: one "M" event per thread, "X" per span,
-    /// "i" per event, "C" per `add!` (one series per node and thread). `name`
-    /// names a node, `measure` an `add!` site.
+    /// The Chrome trace event JSON: one "M" event per thread, "X" per span
+    /// with its node and the node's parent (`null` at the root), "i" per
+    /// event, "C" per `add!` (one series per node and thread). `name` names a
+    /// node, `parent` gives its parent, `measure` names an `add!` site.
     pub(crate) fn write(
         &self,
         name: impl Fn(u32) -> &'static str,
+        parent: impl Fn(u32) -> Option<u32>,
         measure: impl Fn(u32) -> &'static str,
     ) -> String {
         let mut threads: Vec<u32> = self.items.iter().map(|i| i.0).collect();
@@ -63,10 +65,11 @@ impl Stream {
             Item::Span { node, start, dur } => ev(
                 t,
                 format_args!(
-                    "\"ph\":\"X\",\"name\":{},\"ts\":{},\"dur\":{},\"args\":{{\"node\":{node}}}",
+                    "\"ph\":\"X\",\"name\":{},\"ts\":{},\"dur\":{},\"args\":{{\"node\":{node},\"parent\":{}}}",
                     Str(name(node)),
                     Us(start),
-                    Us(dur)
+                    Us(dur),
+                    opt(parent(node))
                 ),
             ),
             Item::Count {
