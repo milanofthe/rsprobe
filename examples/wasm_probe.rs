@@ -17,7 +17,8 @@ fn main() {
         .filter("wasm_probe::quiet", Level::WARN)
         .clock(rsprobe::now)
         .sink(Stderr::default())
-        .sink(buffer.clone());
+        .sink(buffer.clone())
+        .stream();
     #[cfg(feature = "log")]
     let b = b.sink(rsprobe::LogSink);
     let ctx = b.build();
@@ -36,4 +37,5 @@ fn main() {
         black_box((e, path));
     });
     black_box(ctx.record().to_string());
+    black_box(ctx.trace());
 }

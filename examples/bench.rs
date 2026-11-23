@@ -98,6 +98,12 @@ fn main() {
     row("add!, on", time(1, |i| add!("n", i)));
     row("message, below the threshold", time(1, |i| debug!("{i}")));
     row("message, on, no sink", time(1, |i| info!("{i}")));
+    {
+        let streamed = Context::builder().stream().build();
+        let _on = streamed.enter();
+        row("scope, on, flat, stream", time(1, flat));
+        row("add!, on, stream", time(1, |i| add!("n", i)));
+    }
     let c = ctx.record().calibration;
     row("calibration inner", c.inner_ns);
     row("calibration outer", c.outer_ns);

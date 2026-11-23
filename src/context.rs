@@ -3,6 +3,7 @@
 use crate::alloc::{counts, quiet, N};
 use crate::events::Warnings;
 use crate::record::{Calibration, Node, Param, Record};
+use crate::stream::{Item, Stream};
 use crate::{Level, Sink, Site};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -95,6 +96,7 @@ pub(crate) struct Shared {
     tree: Mutex<Tree>,
     pub(crate) sinks: Vec<Box<dyn Sink>>,
     pub(crate) warnings: Mutex<Warnings>,
+    pub(crate) stream: Option<Mutex<Stream>>,
 }
 
 impl Shared {
@@ -113,6 +115,14 @@ impl Shared {
             .map_or(self.threshold, |f| f.1)
     }
 
+    /// The name of the scope of `node`; `root` for the root.
+    fn name(&self, t: &Tree, r: &Registry, node: u32) -> &'static str {
+        match t.keys[node as usize].1 {
+            NONE => "root",
+            s => r.sites[s as usize].name,
+        }
+    }
+
     /// Writes the scope names from the root to `node`, joined by `/`.
     pub(crate) fn path(&self, node: u32, f: &mut fmt::Formatter) -> fmt::Result {
         let t = lock(&self.tree);
@@ -120,9 +130,8 @@ impl Shared {
         let mut names = Vec::new();
         let mut n = node;
         while n != 0 {
-            let (p, s) = t.keys[n as usize];
-            names.push(r.sites[s as usize].name);
-            n = p;
+            names.push(self.name(&t, &r, n));
+            n = t.keys[n as usize].0;
         }
         for (i, name) in names.iter().rev().enumerate() {
             if i > 0 {
@@ -167,6 +176,12 @@ struct Entry {
     clock: Clock,
     /// By site id: 0 undecided, 1 inactive, 2 active in this context.
     active: Vec<u8>,
+    /// Index of this thread among those that entered the context.
+    thread: u32,
+    /// Whether the context keeps a stream, and this thread's items not yet
+    /// flushed to it.
+    stream: bool,
+    items: Vec<Item>,
     /// This thread's cells and child cache, by node id.
     nodes: Vec<Local>,
 }
@@ -200,6 +215,7 @@ thread_local! {
     static THREAD: RefCell<Thread> = const { RefCell::new(Thread { cur: IDLE, entries: Vec::new() }) };
 }
 
+#[inline(always)]
 fn bump(c: &AtomicU64, v: u64) {
     c.store(c.load(Relaxed).wrapping_add(v), Relaxed);
 }
@@ -212,7 +228,17 @@ impl Entry {
     }
 
     /// This thread's base cells of `node`, allocated on first use.
+    #[inline]
     fn base(&mut self, node: u32) -> &Base {
+        match self.nodes.get(node as usize) {
+            // SAFETY: as in `new_base`.
+            Some(l) if !l.base.is_null() => unsafe { &*l.base },
+            _ => self.new_base(node),
+        }
+    }
+
+    #[cold]
+    fn new_base(&mut self, node: u32) -> &Base {
         let n = node as usize;
         if self.nodes.len() <= n {
             self.nodes.resize_with(n + 1, || Local {
@@ -273,6 +299,21 @@ impl Entry {
         unsafe { &*p }
     }
 
+    /// Appends a guard's span to this thread's stream items.
+    #[cold]
+    #[inline(never)]
+    fn span(&mut self, node: u32, start: u64, dur: u64) {
+        quiet(|| self.items.push(Item::Span { node, start, dur }));
+    }
+
+    /// Moves this thread's stream items to the context's stream.
+    fn flush(&mut self) {
+        if let Some(s) = self.live.as_ref().and_then(|l| l.stream.as_ref()) {
+            let t = self.thread;
+            quiet(|| lock(s).items.extend(self.items.drain(..).map(|i| (t, i))));
+        }
+    }
+
     /// Decides once whether `site` is active in this context.
     #[cold]
     #[inline(never)]
@@ -293,7 +334,11 @@ impl Thread {
         if let Some(i) = self.entries.iter().position(|e| e.id == shared.id) {
             return i;
         }
-        lock(&shared.tree).threads += 1;
+        let thread = {
+            let mut t = lock(&shared.tree);
+            t.threads += 1;
+            t.threads - 1
+        };
         let e = Entry {
             id: shared.id,
             weak: Arc::downgrade(shared),
@@ -301,6 +346,9 @@ impl Thread {
             depth: 0,
             clock: shared.clock,
             active: Vec::new(),
+            thread,
+            stream: shared.stream.is_some(),
+            items: Vec::new(),
             nodes: Vec::new(),
         };
         match self.entries.iter().position(|e| e.weak.strong_count() == 0) {
@@ -328,13 +376,13 @@ impl Thread {
     }
 }
 
-/// The current context and node of this thread if `site` is active there,
-/// or for `None` if a site of `level` in `module` would be.
+/// The current context, node and thread index of this thread if `site` is
+/// active there, or for `None` if a site of `level` in `module` would be.
 pub(crate) fn here(
     site: Option<&'static Site>,
     level: Level,
     module: &str,
-) -> Option<(Arc<Shared>, u32)> {
+) -> Option<(Arc<Shared>, u32, u32)> {
     THREAD.with(|t| {
         let t = &mut *t.borrow_mut();
         let node = t.cur.node;
@@ -343,7 +391,8 @@ pub(crate) fn here(
             None => t.entries.get_mut(t.cur.entry as usize)?,
         };
         let shared = e.live.clone()?;
-        (site.is_some() || level <= shared.level(module)).then_some((shared, node))
+        let thread = e.thread;
+        (site.is_some() || level <= shared.level(module)).then_some((shared, node, thread))
     })
 }
 
@@ -386,17 +435,41 @@ impl Site {
             let t = &mut *t.borrow_mut();
             let node = t.cur.node;
             let (e, id) = t.active(self)?;
-            Some(e.extra(node, id) as *const AtomicU64)
+            let stream = e.stream;
+            Some((e.extra(node, id) as *const AtomicU64, node, id, stream))
         });
-        if let Some(c) = cell {
+        if let Some((c, node, site, stream)) = cell {
             // The value is evaluated outside the borrow, so it may enter
             // scopes itself.
             let v = value();
             // SAFETY: as in `Entry::base`; the guard that made the entry
             // current outlives this call.
-            bump(unsafe { &*c }, v);
+            let c = unsafe { &*c };
+            bump(c, v);
+            if stream {
+                count(site, node, c.load(Relaxed));
+            }
         }
     }
+}
+
+/// Appends the value of an `add!` site to this thread's stream items.
+#[cold]
+fn count(site: u32, node: u32, value: u64) {
+    THREAD.with(|t| {
+        let t = &mut *t.borrow_mut();
+        if let Some(e) = t.entries.get_mut(t.cur.entry as usize) {
+            let time = (e.clock)();
+            quiet(|| {
+                e.items.push(Item::Count {
+                    site,
+                    node,
+                    time,
+                    value,
+                })
+            });
+        }
+    })
 }
 
 /// Guard of a scope, of [`Context::enter`] or of [`Handle::enter`]: makes a
@@ -482,11 +555,17 @@ impl Drop for Guard {
             for (k, m) in mem.iter().enumerate() {
                 bump(&b[BYTES + k], m.wrapping_sub(self.mem[k]));
             }
+            if e.stream {
+                e.span(self.cur.node, self.start, dt);
+            }
             t.cur = self.prev;
             if self.scope {
                 return None;
             }
             e.depth -= 1;
+            if e.depth == 0 {
+                e.flush();
+            }
             e.live.take_if(|_| e.depth == 0)
         });
         drop(released);
@@ -558,6 +637,7 @@ pub struct Builder {
     filters: Vec<(String, Level)>,
     clock: Clock,
     sinks: Vec<Box<dyn Sink>>,
+    stream: bool,
 }
 
 impl Builder {
@@ -588,6 +668,14 @@ impl Builder {
         self
     }
 
+    /// Keeps every guard's span, every event and every `add!` value with its
+    /// time, for [`Context::trace`]. Each thread appends to a buffer of its
+    /// own and moves it to the context when its outermost guard drops.
+    pub fn stream(mut self) -> Builder {
+        self.stream = true;
+        self
+    }
+
     /// The context.
     pub fn build(self) -> Context {
         let max = self
@@ -613,6 +701,7 @@ impl Builder {
             }),
             sinks: self.sinks,
             warnings: Mutex::default(),
+            stream: self.stream.then(Mutex::default),
         });
         r.contexts.push((id, max, Arc::downgrade(&shared)));
         MAX.fetch_max(max.0, Relaxed);
@@ -634,6 +723,7 @@ impl Context {
             filters: Vec::new(),
             clock: now,
             sinks: Vec::new(),
+            stream: false,
         }
     }
 
@@ -661,6 +751,32 @@ impl Context {
         #[cfg(not(feature = "on"))]
         let calibration = Calibration::default();
         self.sums(calibration)
+    }
+
+    /// The stream as Chrome trace event JSON, as read by Perfetto, speedscope
+    /// and the Firefox Profiler: per thread an "M" event, per guard span an
+    /// "X" event named by its scope (`root` for the root), per event an "i"
+    /// event, per `add!` a "C" event. Times in microseconds of the context's
+    /// clock. Includes what this thread has recorded so far and what other
+    /// threads have recorded up to the drop of their outermost guard. Empty
+    /// without [`Builder::stream`].
+    pub fn trace(&self) -> String {
+        let Some(stream) = &self.shared.stream else {
+            return String::new();
+        };
+        THREAD.with(|t| {
+            let t = &mut *t.borrow_mut();
+            if let Some(e) = t.entries.iter_mut().find(|e| e.id == self.shared.id) {
+                e.flush();
+            }
+        });
+        let s = lock(stream);
+        let t = lock(&self.shared.tree);
+        let r = lock(&REGISTRY);
+        s.write(
+            |n| self.shared.name(&t, &r, n),
+            |m| r.sites[m as usize].name,
+        )
     }
 
     /// [`record`](Self::record) with the given calibration constants.
