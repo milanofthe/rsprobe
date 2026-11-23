@@ -1,0 +1,17 @@
+[package]
+name = "rsprobe"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Milan Rother"]
+repository = "https://github.com/milanofthe/rsprobe"
+description = "Scopes, additive measures and one run record for numerical solvers"
+
+[features]
+# Without `on` every macro expands to `()` and records nothing.
+default = []
+on = []
+
+[dev-dependencies]
+# Parses the record in the tests.
+serde_json = "1"
