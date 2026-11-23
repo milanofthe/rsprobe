@@ -276,15 +276,18 @@ impl Site {
 /// Appends the value of an `add!` site to this thread's stream items.
 #[cold]
 fn count(site: u32, node: u32, value: u64) {
-    with_current(|_, e| {
-        let time = (e.clock)();
-        e.push(Item::Count {
-            site,
-            node,
-            time,
-            value,
-        })
-    });
+    THREAD.with(|t| {
+        let t = &mut *t.borrow_mut();
+        if let Some(e) = t.entries.get_mut(t.cur.entry as usize) {
+            let time = (e.clock)();
+            e.push(Item::Count {
+                site,
+                node,
+                time,
+                value,
+            });
+        }
+    })
 }
 
 /// Runs `f` on the current node and entry if a context is current.
