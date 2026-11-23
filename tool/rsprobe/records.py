@@ -7,19 +7,43 @@ import os
 SCHEMA = 1
 
 
+class Scope(str):
+    """A scope name in a path, carrying the module of its call site. Two
+    scopes are equal where module and name are; a plain string matches the
+    name alone, so a path can be written as a tuple of names."""
+
+    def __new__(cls, name, module):
+        s = super().__new__(cls, name)
+        s.module = module
+        return s
+
+    def __eq__(self, other):
+        if not isinstance(other, str):
+            return NotImplemented
+        return (str.__eq__(self, other)
+                and getattr(other, "module", self.module) == self.module)
+
+    def __ne__(self, other):
+        eq = self.__eq__(other)
+        return eq if eq is NotImplemented else not eq
+
+    __hash__ = str.__hash__
+
+
 def load(path):
     """A record file as a dict: `file`, `params`, `inner` and `outer` (the
     calibration constants in ns), `threads`, `exact` (the names of the exact
     measures), `nodes`, {path: {measure: value}}, `warnings`, a list of
     (path, level, text, count), and `warnings_dropped`. A path is the tuple of
-    scope names from the root, () for the root; sibling scopes of the same
-    name from different call sites are summed into one node."""
+    scopes (`Scope`) from the root, () for the root; sibling scopes of the
+    same module and name from different call sites are summed into one node,
+    in a record and across records."""
     with open(path) as f:
         doc = json.load(f)
     if doc.get("schema") != SCHEMA:
         raise ValueError("%s: record schema %r, this tool reads %d"
                          % (path, doc.get("schema"), SCHEMA))
-    names = {s["id"]: s["name"] for s in doc["sites"]}
+    names = {s["id"]: Scope(s["name"], s["module"]) for s in doc["sites"]}
     by_id = {n["id"]: n for n in doc["nodes"]}
 
     def path_of(n):

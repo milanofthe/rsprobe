@@ -105,5 +105,88 @@ class Report(unittest.TestCase):
             load_set([path])
 
 
+def edit(path, change):
+    """Applies `change` to the JSON document of a record file."""
+    with open(path) as f:
+        doc = json.load(f)
+    change(doc)
+    with open(path, "w") as f:
+        json.dump(doc, f)
+    return path
+
+
+def solve_in(module):
+    """A record whose scope `solve` comes from `module`."""
+    def change(doc):
+        doc["sites"][0]["module"] = module
+    return change
+
+
+class Records(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def record(self, file, nodes, change):
+        return edit(write(self.dir.name, file, nodes), change)
+
+    def test_siblings_match_by_module_and_name(self):
+        nodes = {(): {"wall": 100}, ("solve",): {"calls": 1, "wall": 60}}
+        a = self.record("a.json", nodes, solve_in("lib::direct"))
+        b = self.record("b.json", nodes, solve_in("lib::iterative"))
+        c = self.record("c.json", nodes, solve_in("lib::direct"))
+        rows, _ = report.rows(load_set([a, b, c]))
+        solves = [r for r in rows if r["path"] == ["solve"]]
+        self.assertEqual(sorted(r["path"][0].module for r in solves),
+                         ["lib::direct", "lib::iterative"])
+        self.assertEqual(sorted(r["calls"] for r in solves), [1, 2])
+
+    def test_sites_of_one_module_and_name_are_one_node(self):
+        def two_sites(doc):
+            doc["sites"].append(dict(doc["sites"][0], id=7, line=9))
+            doc["nodes"].append(dict(doc["nodes"][1], id=2, site=7))
+        nodes = {(): {"wall": 100}, ("solve",): {"calls": 1, "wall": 30}}
+        rows, _ = report.rows(load_set([self.record("s.json", nodes,
+                                                    two_sites)]))
+        self.assertEqual([(r["path"], r["calls"]) for r in rows],
+                         [([], 0), (["solve"], 2)])
+
+    def test_warnings_after_the_tree(self):
+        def warn(dropped):
+            def change(doc):
+                doc["warnings"] = [
+                    {"node": 1, "level": "warn", "module": "m", "file": "f",
+                     "line": 3, "time": 5, "text": "pivot small",
+                     "count": 2},
+                    {"node": 0, "level": "error", "module": "m", "file": "f",
+                     "line": 4, "time": 6, "text": "no convergence",
+                     "count": 1}]
+                doc["warnings_dropped"] = dropped
+            return change
+        nodes = {(): {"wall": 100}, ("solve", "it"): {"calls": 1, "wall": 60},
+                 ("solve",): {"calls": 1, "wall": 80}}
+        runs = load_set([self.record("w%d.json" % k, nodes, warn(k))
+                         for k in range(3)])
+        lines = report.text(runs).splitlines()
+        at = lines.index("warnings, summed:")
+        self.assertGreater(at, max(i for i, x in enumerate(lines)
+                                   if x.startswith("    it")))
+        rows = [x.split(None, 3) for x in lines[at + 2:]]
+        self.assertEqual(rows, [["6", "solve", "warn", "pivot small"],
+                                ["3", "(run)", "error", "no convergence"],
+                                ["3", "not", "kept,", "beyond the record's bound"]])
+        doc = json.loads(report.as_json(runs))
+        self.assertEqual(doc["warnings"][0], {"path": ["solve"], "level": "warn",
+                                              "text": "pivot small", "count": 6})
+        self.assertEqual(doc["warnings_dropped"], 3)
+
+    def test_no_warnings_no_section(self):
+        nodes = {(): {"wall": 100}}
+        runs = load_set([write(self.dir.name, "n.json", nodes)])
+        self.assertNotIn("warnings", report.text(runs))
+
+
 if __name__ == "__main__":
     unittest.main()
