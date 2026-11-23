@@ -19,6 +19,32 @@ What it holds to:
 - Logging through the same context: filters per module, sinks for a terminal, a Python caller and a wasm host, collected warnings, progress.
 - One structured record per run, and a tool that reads it: a report with the ratios a solver is tuned by (time per nonzero, per op, per iteration), a comparison of two sets of runs (exact counts first, then timings with a confidence interval against an A/A threshold), and a scaling analysis that fits a model per scope over problem size or thread count and names the scope that departs.
 
+## Use
+
+Libraries depend on `rsprobe` without features; the binary, test harness or binding that wants a record turns on the feature `on`. Without it `scope!` and `add!` expand to nothing.
+
+```rust
+let ctx = rsprobe::Context::new();
+ctx.param("n", n);
+let _on = ctx.enter();
+{
+    let _s = rsprobe::scope!("factor");
+    rsprobe::add!("nnz", nnz);
+    let _d = rsprobe::scope!(DEBUG, "pivot");
+}
+println!("{}", ctx.record()); // one JSON document
+```
+
+A thread pool takes the current node where a section starts and enters it in each task, so the task's scopes hang under that node and its time counts as `busy` next to the caller's `wall`:
+
+```rust
+let h = rsprobe::current();
+pool.run(|| {
+    let _g = h.enter();
+    let _s = rsprobe::scope!("task");
+});
+```
+
 ## License
 
 MIT
