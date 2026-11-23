@@ -215,6 +215,7 @@ thread_local! {
     static THREAD: RefCell<Thread> = const { RefCell::new(Thread { cur: IDLE, entries: Vec::new() }) };
 }
 
+#[inline(always)]
 fn bump(c: &AtomicU64, v: u64) {
     c.store(c.load(Relaxed).wrapping_add(v), Relaxed);
 }
@@ -227,7 +228,17 @@ impl Entry {
     }
 
     /// This thread's base cells of `node`, allocated on first use.
+    #[inline]
     fn base(&mut self, node: u32) -> &Base {
+        match self.nodes.get(node as usize) {
+            // SAFETY: as in `new_base`.
+            Some(l) if !l.base.is_null() => unsafe { &*l.base },
+            _ => self.new_base(node),
+        }
+    }
+
+    #[cold]
+    fn new_base(&mut self, node: u32) -> &Base {
         let n = node as usize;
         if self.nodes.len() <= n {
             self.nodes.resize_with(n + 1, || Local {
