@@ -94,9 +94,17 @@ std::fs::write("solve.trace.json", ctx.trace())?;
 
 ## Tool
 
-`tool/` reads records: a Python package, standard library only, Python 3.9+. Run it as `python -m rsprobe <command>` from `tool/`, or install it with `pip install ./tool`. A set of records is a record file or a directory of them; several records of a report are summed.
+`tool/` reads records: a Python package, standard library only, Python 3.9+. Run it as `python -m rsprobe <command>` from `tool/`, or install it with `pip install ./tool`. A set of records is a record file or a directory of them.
 
-`report RECORD...`: the tree with the scope cost subtracted (`X' = X - calls inner - (scope instances below) (inner + outer)`, from the record's calibration), self time, the share of the run, the estimated scope cost per node (`!` above 10 percent), and per node the time per unit of each exact measure at scopes whose children ran in their domain, each noisy one (`time!`) in ms and as a share of the node's time, and busy over wall. `--ratio A/B` adds measure A over measure B per node (`width/sections`, a predicted time over `wall`); repeatable. The warnings the records collected follow the tree, with their count and node. Sibling scopes are matched by module and name. `--folded` writes folded stacks for a flame graph, `--json` the rows.
+`report RECORD...`: the tree with the scope cost subtracted (`X' = X - calls inner - (scope instances below) (inner + outer)`, from the record's calibration), self time, the share of the run, the estimated scope cost per node (`!` above 10 percent), and per node the time per unit of each exact measure at scopes whose children ran in their domain, each noisy one (`time!`) in ms and as a share of the node's time, each `max!` measure as a level, and busy over wall. Over several records each noisy value is their median with the range `[min..max]`, an exact one is shown once where the records agree and as its range where not, a `max!` one is the largest; `--sum` shows the sums instead. `--ratio A/B` adds measure A over measure B per node (`width/sections`, a predicted time over `wall`); repeatable. The warnings the records collected follow the tree, with their count and node. Sibling scopes are matched by module and name. `--folded` writes folded stacks for a flame graph, `--json` the rows. `--threads [NODE]` lists, for records taken with `record_threads()`, each thread's values at a node (`pairs/task`) or at every node, with its busy time over the mean of the threads at that node:
+
+```
+1.json: 4 threads, recorded values (scope cost not subtracted)
+node                         thread via        calls    wall ms    busy ms busy/mean  measures
+    task                          1 handle         1      0.000      9.591     0.992  differences=1334000
+                                  2 handle         1      0.000      9.662     0.999  differences=1332000
+                                  3 handle         1      0.000      9.749     1.008  differences=1334000
+```
 
 ```
 run: wall 4.653 ms, busy 17.557 ms, scope cost 0.00% of the thread time
