@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// scope one call.
 #[must_use]
 pub struct Guard {
-    /// Id of the context the guard belongs to.
+    /// Id of the context of `prev`, which for a scope is its own.
     ctx: u64,
     cur: Cur,
     prev: Cur,
@@ -46,8 +46,8 @@ impl Guard {
                 let t = &mut *t.borrow_mut();
                 let i = t.entry(&shared);
                 let prev = t.cur;
+                let ctx = t.entries.get(prev.entry as usize).map_or(0, |p| p.id);
                 let e = &mut t.entries[i];
-                let ctx = e.id;
                 e.depth += 1;
                 e.live.get_or_insert(shared);
                 e.base(node);
@@ -127,7 +127,14 @@ impl Drop for Guard {
             if e.depth == 0 {
                 e.flush();
             }
-            e.live.take_if(|_| e.depth == 0)
+            let released = e.live.take_if(|_| e.depth == 0);
+            // Dropped out of order, the previous node may belong to a
+            // context no longer entered on this thread.
+            let p = entries.get(self.prev.entry as usize);
+            if !p.is_some_and(|p| p.id == self.ctx && p.depth > 0) {
+                *cur = IDLE;
+            }
+            released
         });
     }
 }

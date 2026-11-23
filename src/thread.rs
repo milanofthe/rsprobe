@@ -32,7 +32,8 @@ pub(crate) const IDLE: Cur = Cur {
     busy: false,
 };
 
-/// Every context this thread entered, and the current node.
+/// Every context this thread entered, and the current node. `cur.entry` is
+/// [`NONE`] or an entry with `depth > 0`.
 pub(crate) struct Thread {
     pub(crate) cur: Cur,
     pub(crate) entries: Vec<Entry>,

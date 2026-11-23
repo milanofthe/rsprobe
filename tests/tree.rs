@@ -159,3 +159,21 @@ fn a_scope_outliving_its_context_records_nothing() {
     assert_eq!(r.nodes.len(), 1);
     assert_eq!(r.nodes[0].get("calls"), 0);
 }
+
+#[test]
+fn guards_dropped_out_of_order_leave_no_context_current() {
+    let ctx = Context::new();
+    let on = ctx.enter();
+    let g = current().enter();
+    drop(on);
+    drop(g);
+    // The node `g` restores belongs to a guard already dropped.
+    let s = scope!("after");
+    add!("after", 1);
+    rsprobe::info!("after");
+    let _h = current().enter();
+    drop(s);
+    let r = ctx.record();
+    assert_eq!(r.nodes.len(), 1);
+    assert!(r.find(&["after"]).is_none());
+}
