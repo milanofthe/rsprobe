@@ -143,66 +143,67 @@ fn opt(v: Option<u32>) -> String {
     v.map_or("null".into(), |v| v.to_string())
 }
 
+/// Writes `items` with `each`, separated by commas.
+pub(crate) fn list<W: Write, T>(
+    w: &mut W,
+    items: impl IntoIterator<Item = T>,
+    mut each: impl FnMut(&mut W, T) -> fmt::Result,
+) -> fmt::Result {
+    for (i, x) in items.into_iter().enumerate() {
+        if i > 0 {
+            w.write_char(',')?;
+        }
+        each(w, x)?;
+    }
+    Ok(())
+}
+
 impl Display for Record {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{{\"schema\":{},\"params\":{{", crate::SCHEMA)?;
-        for (i, (k, v)) in self.params.iter().enumerate() {
-            let sep = if i > 0 { "," } else { "" };
-            match v {
-                Param::Num(x) => write!(f, "{sep}{}:{}", Str(k), Num(*x))?,
-                Param::Str(s) => write!(f, "{sep}{}:{}", Str(k), Str(s))?,
-            }
-        }
+        list(f, &self.params, |f, (k, v)| match v {
+            Param::Num(x) => write!(f, "{}:{}", Str(k), Num(*x)),
+            Param::Str(s) => write!(f, "{}:{}", Str(k), Str(s)),
+        })?;
         let c = self.calibration;
         write!(
             f,
-            "}},\"calibration\":{{\"inner_ns\":{},\"outer_ns\":{}}}",
+            "}},\"calibration\":{{\"inner_ns\":{},\"outer_ns\":{}}},\"threads\":{},\"measures\":{{",
             Num(c.inner_ns),
-            Num(c.outer_ns)
+            Num(c.outer_ns),
+            self.threads
         )?;
-        write!(f, ",\"threads\":{},\"measures\":{{", self.threads)?;
-        for (i, (name, exact)) in self.measures.iter().enumerate() {
-            let kind = if *exact { "exact" } else { "noisy" };
-            write!(
-                f,
-                "{}{}:\"{kind}\"",
-                if i > 0 { "," } else { "" },
-                Str(name)
-            )?;
-        }
+        list(f, &self.measures, |f, &(name, exact)| {
+            let kind = if exact { "exact" } else { "noisy" };
+            write!(f, "{}:\"{kind}\"", Str(name))
+        })?;
         f.write_str("},\"sites\":[")?;
-        for (i, (id, s)) in self.sites.iter().enumerate() {
+        list(f, &self.sites, |f, (id, s)| {
             write!(
                 f,
-                "{}{{\"id\":{id},\"name\":{},\"module\":{},\"file\":{},\"line\":{},\"level\":\"{}\"}}",
-                if i > 0 { "," } else { "" },
+                "{{\"id\":{id},\"name\":{},\"module\":{},\"file\":{},\"line\":{},\"level\":\"{}\"}}",
                 Str(s.name),
                 Str(s.module),
                 Str(s.file),
                 s.line,
                 s.level.name()
-            )?;
-        }
+            )
+        })?;
         f.write_str("],\"nodes\":[")?;
-        for (i, n) in self.nodes.iter().enumerate() {
-            let sep = if i > 0 { "," } else { "" };
+        list(f, self.nodes.iter().enumerate(), |f, (i, n)| {
+            let (parent, site) = (opt(n.parent), opt(n.site));
             write!(
                 f,
-                "{sep}{{\"id\":{i},\"parent\":{},\"site\":{},\"values\":{{",
-                opt(n.parent),
-                opt(n.site)
+                "{{\"id\":{i},\"parent\":{parent},\"site\":{site},\"values\":{{"
             )?;
-            for (j, (m, v)) in n.values.iter().enumerate() {
-                write!(f, "{}{}:{v}", if j > 0 { "," } else { "" }, Str(m))?;
-            }
-            f.write_str("}}")?;
-        }
+            list(f, &n.values, |f, (m, v)| write!(f, "{}:{v}", Str(m)))?;
+            f.write_str("}}")
+        })?;
         f.write_str("],\"warnings\":[")?;
-        for (i, (e, count)) in self.warnings.iter().enumerate() {
+        list(f, &self.warnings, |f, (e, count)| {
             write!(
                 f,
-                "{}{{\"node\":{},\"level\":\"{}\",\"module\":{},\"file\":{},\"line\":{},\"time\":{},\"text\":{},\"count\":{count}}}",
-                if i > 0 { "," } else { "" },
+                "{{\"node\":{},\"level\":\"{}\",\"module\":{},\"file\":{},\"line\":{},\"time\":{},\"text\":{},\"count\":{count}}}",
                 e.node,
                 e.level.name(),
                 Str(e.module),
@@ -210,8 +211,8 @@ impl Display for Record {
                 e.line,
                 e.time,
                 Str(&e.kind.to_string()),
-            )?;
-        }
+            )
+        })?;
         write!(f, "],\"warnings_dropped\":{}}}", self.warnings_dropped)
     }
 }
