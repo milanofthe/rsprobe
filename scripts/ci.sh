@@ -8,7 +8,7 @@ PATH="$(dirname "$(rustup which cargo --toolchain stable)"):$PATH"
 export PATH CARGO_TERM_COLOR=always
 run() { echo "== $*"; "$@"; }
 run cargo fmt --check
-for f in "" on alloc; do
+for f in "" on alloc log alloc,log; do
     run cargo clippy --all-targets --features "$f" -- -D warnings
     run cargo test --features "$f"
     # The crate in a browser: linked and importing nothing.

@@ -1,0 +1,151 @@
+//! Messages and progress: node, filters, formatting, warnings, sinks.
+#![cfg(feature = "on")]
+
+use rsprobe::{current, debug, info, progress, scope, trace, warn, Buffer, Context, Kind, Level};
+use std::fmt::{self, Display, Formatter};
+use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+
+/// Events of a buffer as (path, text).
+fn drained(b: &Buffer) -> Vec<(String, String)> {
+    let mut v = Vec::new();
+    b.drain(|e, path| v.push((path.to_string(), e.kind.to_string())));
+    v
+}
+
+#[test]
+fn a_message_lands_at_its_node_also_through_a_handle() {
+    let buffer = Buffer::default();
+    let ctx = Context::builder().sink(buffer.clone()).build();
+    {
+        let _on = ctx.enter();
+        info!("at the root");
+        let _a = scope!("a");
+        let h = current();
+        std::thread::spawn(move || {
+            let _g = h.enter();
+            let _b = scope!("b");
+            info!("on a worker {}", 7);
+        })
+        .join()
+        .unwrap();
+        progress!(3, 4);
+    }
+    info!("no context: dropped");
+    let r = ctx.record();
+    let v = drained(&buffer);
+    assert_eq!(
+        v,
+        [
+            ("".into(), "at the root".into()),
+            ("a/b".into(), "on a worker 7".into()),
+            ("a".into(), "3/4".into()),
+        ]
+    );
+    assert!(r.find(&["a", "b"]).is_some());
+}
+
+mod numeric {
+    pub fn work() {
+        let _s = rsprobe::scope!(DEBUG, "fine");
+        rsprobe::debug!("numeric");
+    }
+}
+
+mod other {
+    pub fn work() {
+        let _s = rsprobe::scope!(DEBUG, "fine");
+        rsprobe::debug!("other");
+    }
+}
+
+#[test]
+fn a_filter_switches_scopes_and_messages_of_a_module_together() {
+    let buffer = Buffer::default();
+    let ctx = Context::builder()
+        .filter("events::numeric", Level::DEBUG)
+        .filter("events::numeric::deeper", Level::ERROR)
+        .filter("events::num", Level::TRACE)
+        .sink(buffer.clone())
+        .build();
+    {
+        let _on = ctx.enter();
+        for _ in 0..2 {
+            numeric::work();
+            other::work();
+        }
+        debug!("root module at INFO");
+    }
+    let r = ctx.record();
+    let n = &r.nodes[r.find(&["fine"]).unwrap() as usize];
+    assert_eq!(n.get("calls"), 2);
+    assert_eq!(r.nodes.len(), 2);
+    let v = drained(&buffer);
+    assert_eq!(v, vec![("fine".to_string(), "numeric".to_string()); 2]);
+}
+
+/// Counts how often it is formatted.
+struct Counted<'a>(&'a AtomicU32);
+
+impl Display for Counted<'_> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        self.0.fetch_add(1, Relaxed);
+        f.write_str("x")
+    }
+}
+
+#[test]
+fn a_site_below_the_threshold_formats_nothing() {
+    let n = AtomicU32::new(0);
+    let ctx = Context::new();
+    let _on = ctx.enter();
+    debug!("{}", Counted(&n));
+    trace!("{}", Counted(&n));
+    assert_eq!(n.load(Relaxed), 0);
+    info!("{}", Counted(&n));
+    assert_eq!(n.load(Relaxed), 1);
+}
+
+#[test]
+fn warnings_are_deduplicated_and_bounded() {
+    let ctx = Context::new();
+    {
+        let _on = ctx.enter();
+        let _s = scope!("solve");
+        for _ in 0..3 {
+            warn!("repeated");
+        }
+        for i in 0..200 {
+            warn!("distinct {i}");
+        }
+        rsprobe::error!("after the bound");
+        info!("not a warning");
+    }
+    let r = ctx.record();
+    assert_eq!(r.warnings.len(), 100);
+    assert_eq!(r.warnings[0].1, 3);
+    assert_eq!(r.warnings[0].0.kind, Kind::Message("repeated".into()));
+    assert_eq!(r.warnings[0].0.level, Level::WARN);
+    assert_eq!(r.warnings[0].0.node, r.find(&["solve"]).unwrap());
+    assert_eq!(r.warnings_dropped, 101 + 1);
+    let v: serde_json::Value = serde_json::from_str(&r.to_string()).unwrap();
+    assert_eq!(v["warnings"][0]["text"], "repeated");
+    assert_eq!(v["warnings"][0]["count"], 3);
+    assert_eq!(v["warnings"][0]["level"], "warn");
+    assert_eq!(v["warnings_dropped"], 102);
+}
+
+#[test]
+fn the_buffer_drains_in_order() {
+    let buffer = Buffer::default();
+    let ctx = Context::builder().sink(buffer.clone()).build();
+    let _on = ctx.enter();
+    for i in 0..5 {
+        info!("{i}");
+    }
+    let mut v = drained(&buffer);
+    info!("5");
+    v.extend(drained(&buffer));
+    let texts: Vec<String> = v.into_iter().map(|e| e.1).collect();
+    assert_eq!(texts, ["0", "1", "2", "3", "4", "5"]);
+    assert!(drained(&buffer).is_empty());
+}

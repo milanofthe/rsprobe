@@ -2,7 +2,7 @@
 //! the clock is a process global.
 #![cfg(feature = "on")]
 
-use rsprobe::{current, scope, Context, Level};
+use rsprobe::{current, scope, Context};
 use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
 
 static TIME: AtomicU64 = AtomicU64::new(0);
@@ -17,7 +17,7 @@ fn at(t: u64) {
 
 #[test]
 fn wall_and_busy() {
-    let ctx = Context::with(Level::INFO, clock);
+    let ctx = Context::builder().clock(clock).build();
     at(100);
     let on = ctx.enter();
     at(200);

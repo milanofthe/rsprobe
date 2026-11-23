@@ -10,7 +10,8 @@ SCHEMA = 1
 def load(path):
     """A record file as a dict: `file`, `params`, `inner` and `outer` (the
     calibration constants in ns), `threads`, `exact` (the names of the exact
-    measures) and `nodes`, {path: {measure: value}}. A path is the tuple of
+    measures), `nodes`, {path: {measure: value}}, `warnings`, a list of
+    (path, level, text, count), and `warnings_dropped`. A path is the tuple of
     scope names from the root, () for the root; sibling scopes of the same
     name from different call sites are summed into one node."""
     with open(path) as f:
@@ -40,6 +41,9 @@ def load(path):
         "threads": doc["threads"],
         "exact": {m for m, k in doc["measures"].items() if k == "exact"},
         "nodes": nodes,
+        "warnings": [(path_of(by_id[w["node"]]), w["level"], w["text"],
+                      w["count"]) for w in doc.get("warnings", [])],
+        "warnings_dropped": doc.get("warnings_dropped", 0),
     }
 
 
