@@ -176,6 +176,37 @@ impl Site {
     }
 }
 
+/// The static call site of one macro expansion, as `&'static Site`.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! site {
+    ($level:ident, $name:expr) => {{
+        static SITE: $crate::Site = $crate::Site::new(
+            $name,
+            module_path!(),
+            file!(),
+            line!(),
+            $crate::Level::$level,
+        );
+        &SITE
+    }};
+}
+
+/// The first group with the feature `on`, the second without.
+#[doc(hidden)]
+#[cfg(feature = "on")]
+#[macro_export]
+macro_rules! on_or {
+    ({ $($on:tt)* } { $($off:tt)* }) => { $($on)* };
+}
+
+#[doc(hidden)]
+#[cfg(not(feature = "on"))]
+#[macro_export]
+macro_rules! on_or {
+    ({ $($on:tt)* } { $($off:tt)* }) => { $($off)* };
+}
+
 /// Enters a scope at the current node and returns its guard:
 /// `scope!("name")` at level INFO, `scope!(DEBUG, "name")` at a given level.
 /// The guard adds one call and the elapsed time on drop.
@@ -185,16 +216,9 @@ macro_rules! scope {
     ($name:expr) => {
         $crate::scope!(INFO, $name)
     };
-    ($level:ident, $name:expr) => {{
-        static SITE: $crate::Site = $crate::Site::new(
-            $name,
-            module_path!(),
-            file!(),
-            line!(),
-            $crate::Level::$level,
-        );
-        SITE.scope()
-    }};
+    ($level:ident, $name:expr) => {
+        $crate::site!($level, $name).scope()
+    };
 }
 
 /// Enters a scope at the current node and returns its guard:
@@ -210,38 +234,18 @@ macro_rules! scope {
 /// Adds a value to an exact measure at the current node:
 /// `add!("iterations", n)` at level INFO, `add!(DEBUG, "iterations", n)` at a
 /// given level. The value is converted with `as u64` and evaluated only when
-/// the site is active.
-#[cfg(feature = "on")]
+/// the site is active. Without the feature `on`: the value is type-checked in
+/// a branch never taken.
 #[macro_export]
 macro_rules! add {
     ($name:expr, $value:expr) => {
         $crate::add!(INFO, $name, $value)
     };
-    ($level:ident, $name:expr, $value:expr) => {{
-        static SITE: $crate::Site = $crate::Site::new(
-            $name,
-            module_path!(),
-            file!(),
-            line!(),
-            $crate::Level::$level,
-        );
-        SITE.add(|| $value as u64)
-    }};
-}
-
-/// Adds a value to an exact measure at the current node:
-/// `add!("iterations", n)` or `add!(DEBUG, "iterations", n)`. Without the
-/// feature `on`: the value is type-checked in a branch never taken.
-#[cfg(not(feature = "on"))]
-#[macro_export]
-macro_rules! add {
-    ($name:expr, $value:expr) => {
-        if false {
-            let _ = $value;
-        }
-    };
     ($level:ident, $name:expr, $value:expr) => {
-        $crate::add!($name, $value)
+        $crate::on_or!(
+            { $crate::site!($level, $name).add(|| $value as u64) }
+            { if false { let _ = $value; } }
+        )
     };
 }
 
@@ -278,58 +282,30 @@ macro_rules! trace {
 }
 
 #[doc(hidden)]
-#[cfg(feature = "on")]
-#[macro_export]
-macro_rules! message {
-    ($level:ident, $($a:tt)+) => {{
-        static SITE: $crate::Site =
-            $crate::Site::new("", module_path!(), file!(), line!(), $crate::Level::$level);
-        SITE.event(|| $crate::Kind::Message(::std::format!($($a)+)))
-    }};
-}
-
-#[doc(hidden)]
-#[cfg(not(feature = "on"))]
 #[macro_export]
 macro_rules! message {
     ($level:ident, $($a:tt)+) => {
-        if false {
-            let _ = ::std::format_args!($($a)+);
-        }
+        $crate::on_or!(
+            { $crate::site!($level, "").event(|| $crate::Kind::Message(::std::format!($($a)+))) }
+            { if false { let _ = ::std::format_args!($($a)+); } }
+        )
     };
 }
 
 /// Emits a progress event at the current node: `progress!(done, total)` at
 /// level INFO, `progress!(DEBUG, done, total)` at a given level. The values
 /// are converted with `as u64` and evaluated only when the site is active.
-#[cfg(feature = "on")]
+/// Without the feature `on`: the values are type-checked in a branch never
+/// taken.
 #[macro_export]
 macro_rules! progress {
     ($done:expr, $total:expr) => {
         $crate::progress!(INFO, $done, $total)
     };
-    ($level:ident, $done:expr, $total:expr) => {{
-        static SITE: $crate::Site =
-            $crate::Site::new("", module_path!(), file!(), line!(), $crate::Level::$level);
-        SITE.event(|| $crate::Kind::Progress {
-            done: $done as u64,
-            total: $total as u64,
-        })
-    }};
-}
-
-/// Emits a progress event at the current node: `progress!(done, total)` or
-/// `progress!(DEBUG, done, total)`. Without the feature `on`: the values are
-/// type-checked in a branch never taken.
-#[cfg(not(feature = "on"))]
-#[macro_export]
-macro_rules! progress {
-    ($done:expr, $total:expr) => {
-        if false {
-            let _ = ($done, $total);
-        }
-    };
     ($level:ident, $done:expr, $total:expr) => {
-        $crate::progress!($done, $total)
+        $crate::on_or!(
+            { $crate::site!($level, "").event(|| $crate::Kind::Progress { done: $done as u64, total: $total as u64 }) }
+            { if false { let _ = ($done, $total); } }
+        )
     };
 }
