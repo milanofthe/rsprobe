@@ -18,11 +18,20 @@ def summary(runs):
     return nodes, run
 
 
-def ratios(v):
-    """Time per unit of each user measure at a node (ns, in the node's
-    domain), and busy over wall where the node has both."""
-    t = v[domain(v)]
-    out = {"ns/" + m: t / x for m, x in v.items() if m not in BUILTIN and x}
+def ratios(v, noisy):
+    """Time per unit of each exact user measure at a node (ns, in the node's
+    domain), each noisy one (a time) over that time, and busy over wall where
+    the node has both."""
+    d = domain(v)
+    t = v[d]
+    out = {}
+    for m, x in v.items():
+        if m in BUILTIN or not x:
+            continue
+        if m not in noisy:
+            out["ns/" + m] = t / x
+        elif t:
+            out["%s/%s" % (m, d)] = x / t
     if v["wall"] > 0 and v["busy"] > 0:
         out["busy/wall"] = v["busy"] / v["wall"]
     return out
@@ -31,12 +40,13 @@ def ratios(v):
 def rows(runs):
     """One dict per node in preorder, with shares and ratios."""
     nodes, run = summary(runs)
+    noisy = set().union(*(r["noisy"] for r in runs))
     out = []
     for p in preorder(nodes):
         v = nodes[p]
         row = {m: v[m] for m in BUILTIN}
         row.update(path=list(p), domain=domain(v), share=share(v, run),
-                   cost_share=cost_share(v), ratios=ratios(v),
+                   cost_share=cost_share(v), ratios=ratios(v, noisy),
                    measures={m: x for m, x in v.items() if m not in BUILTIN})
         out.append(row)
     return out, run
@@ -83,8 +93,10 @@ def text(runs):
             "node", "calls", "wall ms", "busy ms", "self ms", "share",
             "scope", "measures"),
     ]
+    noisy = set().union(*(r["noisy"] for r in runs))
     for r in rs:
-        user = ["%s=%d" % kv for kv in r["measures"].items()]
+        user = ["%s %.3f ms" % (m, x / 1e6) if m in noisy else "%s=%d" % (m, x)
+                for m, x in r["measures"].items()]
         user += ["%s %.4g" % kv for kv in r["ratios"].items()]
         mark = "!" if r["cost_share"] > OVERHEAD_MARK else " "
         label = "  " * len(r["path"]) + (r["path"][-1] if r["path"] else "(run)")

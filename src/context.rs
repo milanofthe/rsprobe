@@ -15,7 +15,8 @@ use std::sync::{Arc, Mutex};
 /// A clock: nanoseconds since an arbitrary fixed origin, non-decreasing.
 pub type Clock = fn() -> u64;
 
-/// Built-in measures, exact or not; user measures follow by name. The last
+/// Built-in measures, exact or not; user measures follow by name, of the
+/// kind of the first site that added to them. The last
 /// three are the counters of [`Alloc`](crate::Alloc), omitted from a record
 /// where they are zero at every node.
 const BUILTIN: [(&str, bool); 6] = [
@@ -292,13 +293,14 @@ impl Context {
         }
         let mut measures = BUILTIN.to_vec();
         for (n, s, c) in &t.extras {
-            let (name, values) = (r.name(*s), &mut nodes[*n as usize].values);
+            let site = r.sites[*s as usize];
+            let (name, values) = (site.name, &mut nodes[*n as usize].values);
             match values.iter_mut().find(|v| v.0 == name) {
                 Some(v) => v.1 += c.load(Relaxed),
                 None => values.push((name, c.load(Relaxed))),
             }
             if !measures.iter().any(|m| m.0 == name) {
-                measures.push((name, true));
+                measures.push((name, site.exact));
             }
         }
         let unused: Vec<&str> = BUILTIN[BYTES..]

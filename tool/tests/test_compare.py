@@ -15,18 +15,21 @@ ROUNDS = 10
 def records(directory, prefix, shift, noise, seed, iterations=10, extra=False):
     """ROUNDS records: a node `work` of 0.9 ms and a `rest` of 0.1 ms, the
     work's time times (1 + shift) and every time times a factor drawn from
-    a normal distribution of the given relative noise."""
+    a normal distribution of the given relative noise; in `work` a noisy
+    measure `wait` of a tenth of its time."""
     rng = random.Random(seed)
     paths = []
     for k in range(ROUNDS):
         work = round(9e5 * (1 + shift) * rng.gauss(1, noise))
         rest = round(1e5 * rng.gauss(1, noise))
         nodes = {(): {"wall": work + rest},
-                 ("work",): {"calls": 1, "wall": work, "iterations": iterations},
+                 ("work",): {"calls": 1, "wall": work, "iterations": iterations,
+                             "wait": work // 10},
                  ("rest",): {"calls": 1, "wall": rest}}
         if extra:
             nodes[("new",)] = {"calls": 1, "wall": 1}
-        paths.append(write(directory, "%s%02d.json" % (prefix, k), nodes))
+        paths.append(write(directory, "%s%02d.json" % (prefix, k), nodes,
+                           noisy=("wait",)))
     return load_set(paths)
 
 
@@ -38,8 +41,8 @@ class Compare(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def verdict(self, c, path):
-        return [r[7] for r in c["noisy"] if r[0] == path and r[1] == "wall"][0]
+    def verdict(self, c, path, x="wall"):
+        return [r[7] for r in c["noisy"] if r[0] == path and r[1] == x][0]
 
     def test_ten_percent_at_one_percent_noise_is_flagged(self):
         c = compare(records(self.d, "a", 0, 0.01, 1),
@@ -48,6 +51,17 @@ class Compare(unittest.TestCase):
         self.assertIn((("work",), "wall"), c["gate"])
         self.assertEqual(self.verdict(c, ("rest",)), "within noise")
         self.assertEqual(c["exact"], [])
+
+    def test_a_noisy_measure_of_the_program_is_compared_with_an_interval(self):
+        # it differs from round to round: no exact difference, a verdict
+        c = compare(records(self.d, "a", 0, 0.01, 1),
+                    records(self.d, "b", 0.10, 0.01, 2))
+        self.assertEqual(c["nondeterministic"], [])
+        self.assertEqual(self.verdict(c, ("work",), "wait"), "slower")
+        self.assertNotIn((("work",), "wait"), c["gate"])
+        c = compare(records(self.d, "a", 0, 0.05, 3),
+                    records(self.d, "b", 0.01, 0.05, 4))
+        self.assertEqual(self.verdict(c, ("work",), "wait"), "within noise")
 
     def test_ten_percent_faster_does_not_fail_the_gate(self):
         c = compare(records(self.d, "a", 0, 0.01, 1),

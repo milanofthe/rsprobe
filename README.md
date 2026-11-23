@@ -29,7 +29,8 @@ ctx.param("n", n);
 let _on = ctx.enter();
 {
     let _s = rsprobe::scope!("factor");
-    rsprobe::add!("nnz", nnz);
+    rsprobe::add!("nnz", nnz);          // an exact measure: a count
+    rsprobe::time!(DEBUG, "wait", ns);  // a noisy one: a time measured by the caller
     let _d = rsprobe::scope!(DEBUG, "pivot");
 }
 println!("{}", ctx.record()); // one JSON document
@@ -88,7 +89,7 @@ std::fs::write("solve.trace.json", ctx.trace())?;
 
 `tool/` reads records: a Python package, standard library only, Python 3.9+. Run it as `python -m rsprobe <command>` from `tool/`, or install it with `pip install ./tool`. A set of records is a record file or a directory of them; several records of a report are summed.
 
-`report RECORD...`: the tree with the scope cost subtracted (`X' = X - calls inner - (scope instances below) (inner + outer)`, from the record's calibration), self time, the share of the run, the estimated scope cost per node (`!` above 10 percent), and per node the time per unit of each measure and busy over wall. The warnings the records collected follow the tree, with their count and node. Sibling scopes are matched by module and name. `--folded` writes folded stacks for a flame graph, `--json` the rows.
+`report RECORD...`: the tree with the scope cost subtracted (`X' = X - calls inner - (scope instances below) (inner + outer)`, from the record's calibration), self time, the share of the run, the estimated scope cost per node (`!` above 10 percent), and per node the time per unit of each exact measure, each noisy one (`time!`) in ms and as a share of the node's time, and busy over wall. The warnings the records collected follow the tree, with their count and node. Sibling scopes are matched by module and name. `--folded` writes folded stacks for a flame graph, `--json` the rows.
 
 ```
 run: wall 4.653 ms, busy 17.557 ms, scope cost 0.00% of the thread time
@@ -101,7 +102,7 @@ node                            calls    wall ms    busy ms    self ms   share  
     task                            4      0.000     17.552     17.552  100.0%   0.0%  differences=16000000, ns/differences 1.097
 ```
 
-`compare A B [--aa A2]`: exact measures first, every difference between the sets and within a set; then per node the ratio of the median times with a 95 percent bootstrap interval, against a noise band from the A/A sets when given. Exit code 1 when a node of at least 5 percent of the run is slower beyond the band.
+`compare A B [--aa A2]`: exact measures first, every difference between the sets and within a set; then per node and noisy measure (`wall`, `busy` and those added with `time!`) the ratio of the medians with a 95 percent bootstrap interval, against a noise band from the A/A sets when given. Exit code 1 when the `wall` or `busy` of a node of at least 5 percent of the run is slower beyond the band.
 
 ```
 exact measures, A -> B:

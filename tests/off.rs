@@ -1,7 +1,7 @@
 //! Without the feature `on` the macros expand to `()`.
 #![cfg(not(feature = "on"))]
 
-use rsprobe::{add, scope, Context};
+use rsprobe::{add, scope, time, Context};
 
 fn evaluated() -> u64 {
     panic!("the value of add! is evaluated")
@@ -16,6 +16,8 @@ fn macros_expand_to_nothing() {
     assert_eq!(std::mem::size_of_val(&s) + std::mem::size_of_val(&t), 0);
     add!("n", evaluated());
     add!(DEBUG, "n", evaluated());
+    time!("t", evaluated());
+    time!(DEBUG, "t", evaluated());
     let r = ctx.record();
     assert_eq!(r.nodes.len(), 1);
     assert_eq!(r.calibration.inner_ns, 0.0);

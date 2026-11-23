@@ -3,9 +3,10 @@
 //! A [`Context`] belongs to one problem. Scopes entered while it is current
 //! form a tree of nodes keyed by (parent node, call site); every node holds
 //! additive `u64` measures: `calls`, `wall` and `busy` in nanoseconds, the
-//! counts added with [`add!`] and, with the feature `alloc` where the binary
-//! installs [`Alloc`], `bytes`, `allocs` and `freed`. [`Context::record`] sums the threads and
-//! returns a [`Record`] that writes itself as JSON.
+//! counts added with [`add!`], the times added with [`time!`] and, with the
+//! feature `alloc` where the binary installs [`Alloc`], `bytes`, `allocs` and
+//! `freed`. [`Context::record`] sums the threads and returns a [`Record`] that
+//! writes itself as JSON.
 //!
 //! ```
 //! let ctx = rsprobe::Context::new();
@@ -111,14 +112,14 @@ const WARNINGS: usize = 100;
 #[doc(hidden)]
 #[macro_export]
 macro_rules! site {
-    ($level:ident, $name:expr) => {{
+    ($level:ident, $name:expr $(, $kind:ident)?) => {{
         static SITE: $crate::Site = $crate::Site::new(
             $name,
             module_path!(),
             file!(),
             line!(),
             $crate::Level::$level,
-        );
+        )$(.$kind())?;
         &SITE
     }};
 }
@@ -176,6 +177,23 @@ macro_rules! add {
         $crate::on_or!(
             { $crate::site!($level, $name).add(|| $value as u64) }
             { if false { let _ = $value; } }
+        )
+    };
+}
+
+/// Adds a duration in ns to a noisy measure at the current node, one the
+/// caller timed itself (a wait, a predicted time): `time!("wait", ns)` or
+/// `time!(DEBUG, "wait", ns)`. As [`add!`]; the record declares the measure
+/// noisy, and a comparison treats it as `wall`.
+#[macro_export]
+macro_rules! time {
+    ($name:expr, $ns:expr) => {
+        $crate::time!(INFO, $name, $ns)
+    };
+    ($level:ident, $name:expr, $ns:expr) => {
+        $crate::on_or!(
+            { $crate::site!($level, $name, noisy).add(|| $ns as u64) }
+            { if false { let _ = $ns; } }
         )
     };
 }

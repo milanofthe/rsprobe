@@ -31,12 +31,15 @@ def series(rounds, p, x):
 
 def compare(a, b, aa=None):
     """The comparison of record sets a and b (lists of loaded records), with
-    aa a second set of a's build for the noise band. Returns a dict:
+    aa a second set of a's build for the noise band. Noisy measures added by
+    the program (`time!`) are compared as wall and busy are; only wall and
+    busy, the run's time, fail the gate. Returns a dict:
     `exact`, `nondeterministic`, `structure` and `noisy` lists, `band`
     (the band's source) and `gate` (the nodes failing the gate)."""
     A, B = [corrected(r) for r in a], [corrected(r) for r in b]
     AA = (A, [corrected(r) for r in aa]) if aa else None
     exact = set().union(*(r["exact"] for r in a + b))
+    noisy = set().union(*(r["noisy"] for r in a + b)) - {"wall", "busy"}
     in_a = {p for nodes, _ in A for p in nodes}
     in_b = {p for nodes, _ in B for p in nodes}
     out = {"exact": [], "nondeterministic": [], "structure": [], "noisy": [],
@@ -54,11 +57,13 @@ def compare(a, b, aa=None):
                     out["nondeterministic"].append((p, m, side, sorted(set(vs))))
             if len(set(va)) == 1 == len(set(vb)) and va[0] != vb[0]:
                 out["exact"].append((p, m, va[0], vb[0]))
-        for x in ("wall", "busy"):
+        for x in ["wall", "busy"] + [m for m in here if m in noisy]:
             va, vb = series(A, p, x), series(B, p, x)
             if not (median(va) > 0 and median(vb) > 0):
                 continue
-            sh = median([share(nodes.get(p, {}), run, x) for nodes, run in A])
+            timed = x in ("wall", "busy")
+            sh = median([share(nodes.get(p, {}), run, x if timed else None)
+                         for nodes, run in A])
             if min(len(va), len(vb)) < MIN_ROUNDS:
                 row = (p, x, median(va), median(vb), None, None, None,
                        "too few rounds", sh)
@@ -70,7 +75,7 @@ def compare(a, b, aa=None):
                        "faster" if hi < math.exp(-w) else "within noise")
             out["noisy"].append((p, x, median(va), median(vb), r, lo, hi,
                                  verdict, sh))
-            if verdict == "slower" and sh >= GATE_SHARE:
+            if verdict == "slower" and sh >= GATE_SHARE and timed:
                 out["gate"].append((p, x))
     return out
 
@@ -89,11 +94,11 @@ def text(c):
         out += ["  %-32s only in %s" % (name(p), s) for p, s in c["structure"]]
     out.append("noisy measures, median over records (ms), B/A with its "
                "%g%% bootstrap interval:" % (100 * CONFIDENCE))
-    out.append("  %-32s %-5s %10s %10s %7s %17s %6s  %s" % (
+    out.append("  %-32s %-9s %10s %10s %7s %17s %6s  %s" % (
         "node", "", "A", "B", "B/A", "interval", "share", "verdict"))
     for p, x, ma, mb, r, lo, hi, verdict, sh in c["noisy"]:
         ci = "[%.3f, %.3f]" % (lo, hi) if r else ""
-        out.append("  %-32s %-5s %10.3f %10.3f %7s %17s %5.1f%%  %s" % (
+        out.append("  %-32s %-9s %10.3f %10.3f %7s %17s %5.1f%%  %s" % (
             name(p), x, ma / 1e6, mb / 1e6, "%.3f" % r if r else "", ci,
             100 * sh, verdict))
     out.append("gate: %s" % (

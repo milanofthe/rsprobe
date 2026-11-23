@@ -42,6 +42,9 @@ pub struct Site {
     pub line: u32,
     /// Level against the context's threshold.
     pub level: Level,
+    /// For a measure site: exact (a count, [`add!`](crate::add)) or noisy (a
+    /// time, [`time!`](crate::time)).
+    pub exact: bool,
     /// Id plus one; zero until registered.
     id: AtomicU32,
 }
@@ -62,8 +65,15 @@ impl Site {
             file,
             line,
             level,
+            exact: true,
             id,
         }
+    }
+
+    /// This site as a noisy measure.
+    pub const fn noisy(mut self) -> Site {
+        self.exact = false;
+        self
     }
 
     /// The id, registered under the registry's lock on first use.

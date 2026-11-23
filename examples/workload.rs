@@ -4,7 +4,7 @@
 //!
 //!     cargo run --example workload --features on -- N THREADS
 
-use rsprobe::{add, current, scope, Context};
+use rsprobe::{add, current, now, scope, time, Context};
 use std::hint::black_box;
 
 /// Problem size when not given.
@@ -39,7 +39,8 @@ fn solve(v: &[f64]) -> f64 {
     x
 }
 
-/// Order n^2, split over worker threads that enter the section's node.
+/// Order n^2, split over worker threads that enter the section's node; the
+/// time the caller waits to join them as `join`.
 fn pairs(v: &[f64], threads: usize) -> f64 {
     let _s = scope!("pairs");
     let h = current();
@@ -58,7 +59,10 @@ fn pairs(v: &[f64], threads: usize) -> f64 {
                 })
             })
             .collect();
-        tasks.into_iter().map(|t| t.join().unwrap()).sum()
+        let t = now();
+        let sum = tasks.into_iter().map(|t| t.join().unwrap()).sum();
+        time!("join", now() - t);
+        sum
     })
 }
 
