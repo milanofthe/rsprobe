@@ -1,9 +1,9 @@
-"""Command line: python -m rsprobe {report,compare,ab} ..."""
+"""Command line: python -m rsprobe {report,compare,ab,scale} ..."""
 
 import argparse
 import sys
 
-from . import ab, compare, report
+from . import ab, compare, report, scale
 from .records import load_set
 
 
@@ -31,6 +31,14 @@ def parser():
                    "temporary one)")
     a.add_argument("cmd", nargs=argparse.REMAINDER,
                    help="-- CMD_A :: CMD_B")
+    s = sub.add_parser("scale", help="records over a run parameter: a fit "
+                       "per node, or speedup over a thread count")
+    s.add_argument("records", nargs="+", help="record files or directories")
+    s.add_argument("--by", required=True, help="the parameter, from the "
+                   "records' params")
+    s.add_argument("--threads", action="store_true",
+                   help="the parameter is a thread count: speedup, "
+                   "efficiency and serial fraction instead of a fit")
     return ap
 
 
@@ -42,6 +50,10 @@ def main(argv=None):
             form = (report.folded if args.folded else
                     report.as_json if args.json else report.text)
             print(form(runs))
+            return 0
+        if args.command == "scale":
+            form = scale.text_threads if args.threads else scale.text
+            print(form(load_set(args.records), args.by))
             return 0
         if args.command == "ab":
             cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd

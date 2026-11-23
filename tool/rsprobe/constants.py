@@ -30,3 +30,15 @@ GATE_SHARE = 0.05
 # recorded time: beyond it the corrected time is set mostly by the
 # calibration constants, not by the measurement.
 OVERHEAD_MARK = 0.10
+
+# Fewest distinct parameter values for a fit of c n^p log^q(n): two points
+# fit any two-parameter model exactly and leave no residual.
+MIN_FIT_POINTS = 3
+
+# Powers of log(n) tried in the fit.
+LOG_POWERS = (0, 1)
+
+# A node's exponent departs from the run's when the local exponents at the
+# largest n differ by more than this. Three points over a factor of 10 at
+# 5 percent timing noise give a slope error of 0.03; 0.1 is three of them.
+DEPARTURE = 0.1
