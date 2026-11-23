@@ -15,10 +15,9 @@ use std::sync::{Arc, Mutex};
 /// A clock: nanoseconds since an arbitrary fixed origin, non-decreasing.
 pub type Clock = fn() -> u64;
 
-/// Built-in measures, exact or not; user measures follow by name, of the
-/// kind of the first site that added to them. The last
-/// three are the counters of [`Alloc`](crate::Alloc), omitted from a record
-/// where they are zero at every node.
+/// Built-in measures, exact or not; user measures follow by name, of the kind
+/// of their first site. The last three are the counters of [`Alloc`](
+/// crate::Alloc), omitted from a record where they are zero at every node.
 const BUILTIN: [(&str, bool); 6] = [
     ("calls", true),
     ("wall", false),
