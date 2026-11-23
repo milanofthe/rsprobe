@@ -193,5 +193,79 @@ class Records(unittest.TestCase):
         self.assertNotIn("warnings", report.text(runs))
 
 
+
+# A section `sec` on the calling thread whose tasks ran on workers inside the
+# tasks of an outer section `par`: `sec` has wall time only, its tasks busy
+# time only. inner 10 ns, outer 5 ns.
+WORKERS = {
+    (): {"wall": 10000},
+    ("par",): {"calls": 1, "wall": 3000, "busy": 40000},
+    ("par", "outer"): {"calls": 4, "busy": 38000},
+    ("sec",): {"calls": 1, "wall": 2000, "width": 8, "sections": 2},
+    ("sec", "task"): {"calls": 100, "busy": 30000, "nnz": 600},
+}
+
+# By hand: a time measure a node has none of is not corrected.
+# par:   wall 3000 - 10 = 2990, self 2990; busy 40000 - 4*15 = 39940
+# outer: busy 38000 - 4*10 = 37960, self 37960
+# sec:   wall 2000 - 10 = 1990, self 1990; busy 0 (no interval to correct)
+# task:  busy 30000 - 100*10 = 29000, self 29000
+# run:   wall 10000 - 2*15 = 9970, self 9970 - 2990 - 1990 = 4990
+#        busy = busy of par and sec = 39940
+WORKERS_EXPECTED = {
+    (): (9970, 0, 4990),
+    ("par",): (2990, 39940, 2990),
+    ("par", "outer"): (0, 37960, 37960),
+    ("sec",): (1990, 0, 1990),
+    ("sec", "task"): (0, 29000, 29000),
+}
+
+
+class Workers(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.runs = load_set([write(self.dir.name, "w.json", WORKERS, 10, 5)])
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_a_measure_without_time_is_not_corrected(self):
+        rows, run = report.rows(self.runs)
+        got = {tuple(r["path"]): r for r in rows}
+        for p, (wall, busy, own) in WORKERS_EXPECTED.items():
+            self.assertEqual((got[p]["wall"], got[p]["busy"], got[p]["self"]),
+                             (wall, busy, own), msg=p)
+        self.assertEqual((run["wall"], run["busy"]), (9970, 39940))
+        self.assertAlmostEqual(got[("sec", "task")]["share"], 29000 / 39940)
+
+    def test_an_open_root_has_no_self_time(self):
+        nodes = dict(WORKERS)
+        nodes[()] = {"wall": 0}
+        runs = load_set([write(self.dir.name, "o.json", nodes, 10, 5)])
+        rows, _ = report.rows(runs)
+        self.assertEqual((rows[0]["wall"], rows[0]["self"]), (0, 0))
+
+    def test_ns_per_unit_only_where_the_time_is_the_nodes_own(self):
+        rows, _ = report.rows(self.runs)
+        got = {tuple(r["path"]): r["ratios"] for r in rows}
+        # sec waits for tasks timed in busy: no ns/width, no ns/sections
+        self.assertEqual(got[("sec",)], {})
+        self.assertEqual(got[("sec", "task")], {"ns/nnz": 29000 / 600})
+
+    def test_asked_ratios(self):
+        asked = [report.asked_ratio("width/sections"),
+                 report.asked_ratio("busy/nnz")]
+        rows, _ = report.rows(self.runs, asked)
+        got = {tuple(r["path"]): r["ratios"] for r in rows}
+        self.assertEqual(got[("sec",)], {"width/sections": 4})
+        self.assertEqual(got[("sec", "task")], {"ns/nnz": 29000 / 600,
+                                                "busy/nnz": 29000 / 600})
+        line = [x for x in report.text(self.runs, asked).splitlines()
+                if x.startswith("  sec")][0]
+        self.assertIn("width/sections 4", line)
+        with self.assertRaises(ValueError):
+            report.asked_ratio("width")
+
+
 if __name__ == "__main__":
     unittest.main()

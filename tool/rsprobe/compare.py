@@ -106,3 +106,25 @@ def text(c):
         if c["gate"] else "passes: no node of at least %g%% of the run slower "
         "beyond the band" % (100 * GATE_SHARE)))
     return "\n".join(out)
+
+
+def table(cases):
+    """One line per (name, comparison): the run's wall time (the root's)
+    with its verdict, the number of exact differences and the gate."""
+    out = ["run wall time, median over records (ms), B/A with its %g%% "
+           "bootstrap interval:" % (100 * CONFIDENCE),
+           "%-16s %10s %10s %7s %17s %-13s %5s  %s" % (
+               "case", "A", "B", "B/A", "interval", "verdict", "exact",
+               "gate")]
+    for n, c in cases:
+        run = [r for r in c["noisy"] if r[0] == () and r[1] == "wall"]
+        _, _, ma, mb, r, lo, hi, verdict, _ = run[0] if run else (
+            (), "", 0, 0, None, 0, 0, "no run time", 0)
+        out.append("%-16s %10.3f %10.3f %7s %17s %-13s %5d  %s" % (
+            n, ma / 1e6, mb / 1e6, "%.3f" % r if r else "",
+            "[%.3f, %.3f]" % (lo, hi) if r else "", verdict,
+            len(c["exact"]) + len(c["structure"]),
+            "fails on " + ", ".join("%s %s" % (name(p), x)
+                                    for p, x in c["gate"])
+            if c["gate"] else "passes"))
+    return "\n".join(out)
