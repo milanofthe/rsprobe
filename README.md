@@ -53,6 +53,8 @@ pool.run(|| {
 });
 ```
 
+A worker keeps the context it entered through a handle until it enters another one or ends, so the next task of the same context writes nothing shared with other threads; a dropped context's tree is freed when the last worker holding it moves on. `rsprobe::active!(DEBUG)` says whether a site at that level would record on this thread, so a caller reads a clock for a `time!` value only then.
+
 Messages are events at the current node, at the level of their macro; the text is formatted only when the site is active. A context is built with a threshold, filters per module and its sinks; scopes and messages of a module switch together. Events at WARN and above go into the record once per site and text, with a count.
 
 ```rust

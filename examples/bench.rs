@@ -6,9 +6,10 @@
 //!     cargo run --release --example bench --features on
 //!     cargo run --release --example bench --features alloc
 
-use rsprobe::{add, current, debug, info, scope, Alloc, Context, Level};
+use rsprobe::{add, current, debug, info, scope, time, Alloc, Context, Handle, Level};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
+use std::sync::Barrier;
 use std::time::Instant;
 
 /// Rounds per case; the median is printed.
@@ -49,6 +50,45 @@ fn nested(_: u32) {
     let _d = scope!("n4");
 }
 
+/// Five DEBUG sites, as a pool's serial section carries.
+fn five(i: u32) {
+    add!(DEBUG, "a", i);
+    add!(DEBUG, "b", i);
+    time!(DEBUG, "c", i);
+    add!(DEBUG, "d", i);
+    debug!("{i}");
+}
+
+/// Median over rounds of the mean over `n` threads of the time per entry of
+/// `h` with a scope inside, in ns; the threads start each round together.
+fn entries(n: usize, h: Handle) -> f64 {
+    let mut v: Vec<f64> = (0..ROUNDS)
+        .map(|_| {
+            let go = Barrier::new(n);
+            let ns: f64 = std::thread::scope(|s| {
+                let t: Vec<_> = (0..n)
+                    .map(|_| {
+                        s.spawn(|| {
+                            drop(h.enter());
+                            go.wait();
+                            let t = Instant::now();
+                            for _ in 0..N {
+                                let _g = h.enter();
+                                let _s = scope!("task");
+                            }
+                            t.elapsed().as_nanos() as f64 / N as f64
+                        })
+                    })
+                    .collect();
+                t.into_iter().map(|t| t.join().unwrap()).sum()
+            });
+            ns / n as f64
+        })
+        .collect();
+    v.sort_by(f64::total_cmp);
+    v[ROUNDS / 2]
+}
+
 /// An allocation and a free of `size` bytes through `a`.
 fn alloc_free(a: &impl GlobalAlloc, size: usize) {
     let l = Layout::from_size_align(size, 8).unwrap();
@@ -76,6 +116,13 @@ fn main() {
         return;
     }
     row("scope, no context", time(1, flat));
+    row(
+        "current(), no context",
+        time(1, |_| {
+            black_box(current());
+        }),
+    );
+    row("five DEBUG sites, no context", time(1, five));
     let nothing = current();
     row(
         "Handle::enter, no context",
@@ -88,6 +135,13 @@ fn main() {
         "Handle::enter, context on another thread",
         std::thread::scope(|s| s.spawn(|| time(1, |_| drop(h.enter()))).join().unwrap()),
     );
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    for n in [1, 4, 16].into_iter().filter(|&n| n <= cpus) {
+        row(
+            &format!("Handle::enter + scope, {n} threads"),
+            entries(n, h),
+        );
+    }
     row(
         "scope, below the threshold",
         time(1, |_| {

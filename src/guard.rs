@@ -51,33 +51,49 @@ impl Guard {
         _thread: PhantomData,
     };
 
-    /// Makes `node` of `shared` current on this thread. The allocations of a
-    /// thread's first entry are not counted.
+    /// Makes `node` of `shared` current on this thread. The other context
+    /// this thread holds without a guard, if any, is released after the
+    /// borrow. The allocations of a thread's first entry are not counted.
     pub(crate) fn enter(shared: Arc<Shared>, node: u32, busy: bool) -> Guard {
         let mut g = quiet(|| {
-            THREAD.with(|t| {
-                let t = &mut *t.borrow_mut();
-                let i = t.entry(&shared);
-                let prev = t.cur;
-                let ctx = t.entries.get(prev.entry as usize).map_or(0, |p| p.id);
-                let e = &mut t.entries[i];
-                e.depth += 1;
-                e.live.get_or_insert(shared);
-                e.base(node);
-                let entry = i as u32;
-                t.cur = Cur { entry, node, busy };
-                let start = (e.clock)();
-                Guard {
-                    ctx,
-                    cur: t.cur,
-                    prev,
-                    start,
-                    ..Guard::IDLE
-                }
-            })
+            THREAD
+                .with(|t| {
+                    let t = &mut *t.borrow_mut();
+                    let i = t.entry(&shared);
+                    let held = |e: &Entry| e.depth == 0 && e.live.is_some();
+                    let other = t.entries.iter_mut().find(|e| held(e) && e.id != shared.id);
+                    let released = other.and_then(|e| e.live.take());
+                    t.entries[i].live.get_or_insert(shared);
+                    (t.open(i, node, busy), released)
+                })
+                .0
         });
         g.mem = counts();
         g
+    }
+}
+
+impl Thread {
+    /// Makes `node` of entry `i`, whose context is held, current.
+    fn open(&mut self, i: usize, node: u32, busy: bool) -> Guard {
+        let prev = self.cur;
+        let ctx = self.entries.get(prev.entry as usize).map_or(0, |p| p.id);
+        let e = &mut self.entries[i];
+        e.depth += 1;
+        e.base(node);
+        self.cur = Cur {
+            entry: i as u32,
+            node,
+            busy,
+        };
+        let start = (e.clock)();
+        Guard {
+            ctx,
+            cur: self.cur,
+            prev,
+            start,
+            ..Guard::IDLE
+        }
     }
 }
 
@@ -147,7 +163,9 @@ impl Drop for Guard {
             if e.depth == 0 {
                 e.flush();
             }
-            let released = e.live.take_if(|_| e.depth == 0);
+            // A thread keeps a context entered through a handle.
+            let keep = self.cur.busy && !e.shared().closed.load(Relaxed);
+            let released = e.live.take_if(|_| e.depth == 0 && !keep);
             // Dropped out of order, the previous node may belong to a
             // context no longer entered on this thread.
             let p = entries.get(self.prev.entry as usize);
@@ -178,7 +196,7 @@ pub struct Handle {
 #[inline]
 pub fn current() -> Handle {
     let none = Handle { ctx: 0, node: 0 };
-    if cfg!(not(feature = "on")) {
+    if cfg!(not(feature = "on")) || MAX.load(Relaxed) == 0 {
         return none;
     }
     with_current(|cur, e| Handle {
@@ -197,41 +215,62 @@ impl Handle {
     /// the time stays in the measure this thread records and the guard adds
     /// no span, as an open guard of this thread covers it. Records nothing
     /// if the context has been dropped.
+    ///
+    /// A thread holds the context it entered through a handle after the
+    /// guard drops, so entering it again writes no state shared with other
+    /// threads; it lets go when it enters another context or ends, or enters
+    /// this one after the [`Context`](crate::Context) dropped. A context's
+    /// tree is freed when the last thread that holds it lets go.
     #[inline]
     pub fn enter(self) -> Guard {
         // No context, or the feature absent: nothing to look up.
-        if cfg!(not(feature = "on")) || self.ctx == 0 {
+        if cfg!(not(feature = "on")) || self.ctx == 0 || MAX.load(Relaxed) == 0 {
             return Guard::IDLE;
         }
-        let switched = THREAD.with(|t| {
-            let Thread { cur, entries } = &mut *t.borrow_mut();
-            let e = entries.get_mut(cur.entry as usize)?;
-            if e.id != self.ctx {
-                return None;
+        self.held()
+    }
+
+    /// [`enter`](Self::enter) where a context is live.
+    fn held(self) -> Guard {
+        let held = THREAD.with(|t| {
+            let t = &mut *t.borrow_mut();
+            let Thread { cur, entries } = t;
+            if let Some(e) = entries
+                .get_mut(cur.entry as usize)
+                .filter(|e| e.id == self.ctx)
+            {
+                let prev = *cur;
+                quiet(|| e.base(self.node));
+                cur.node = self.node;
+                let kind = Kind::Switch;
+                return Ok(Guard {
+                    ctx: e.id,
+                    cur: *cur,
+                    prev,
+                    kind,
+                    ..Guard::IDLE
+                });
             }
-            let prev = *cur;
-            quiet(|| {
-                e.base(self.node);
-            });
-            cur.node = self.node;
-            Some(Guard {
-                ctx: e.id,
-                cur: *cur,
-                prev,
-                kind: Kind::Switch,
-                ..Guard::IDLE
-            })
+            let i = entries.iter().position(|e| e.id == self.ctx).ok_or(None)?;
+            let e = &mut entries[i];
+            if e.live.as_ref().is_some_and(|s| !s.closed.load(Relaxed)) {
+                let mut g = quiet(|| t.open(i, self.node, true));
+                g.mem = counts();
+                return Ok(g);
+            }
+            // Held after its context dropped: released after the borrow.
+            Err(e
+                .live
+                .take_if(|_| e.depth == 0)
+                .or_else(|| e.weak.upgrade()))
         });
-        if let Some(g) = switched {
-            return g;
-        }
-        // A context this thread has entered is looked up without a lock.
-        let local = THREAD.with(|t| {
-            let t = t.borrow();
-            let e = t.entries.iter().find(|e| e.id == self.ctx);
-            e.map(|e| e.weak.upgrade())
-        });
-        match local.unwrap_or_else(|| registry().find(self.ctx)) {
+        // Not held: a context this thread has entered is looked up without
+        // a lock.
+        let shared = match held {
+            Ok(g) => return g,
+            Err(s) => s.or_else(|| registry().find(self.ctx)),
+        };
+        match shared.filter(|s| !s.closed.load(Relaxed)) {
             Some(s) => Guard::enter(s, self.node, true),
             None => Guard::IDLE,
         }
