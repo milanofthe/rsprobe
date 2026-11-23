@@ -9,7 +9,18 @@ use std::cell::Cell;
 /// call counts nothing. The counters are const-initialised thread-local cells
 /// without a destructor, so the wrapper neither allocates nor locks and counts
 /// during thread start and teardown too. Without the feature `alloc` it only
-/// forwards. Installed by the final binary:
+/// forwards.
+///
+/// `peak` of a scope: the largest value of this thread's live bytes (`bytes`
+/// minus `freed`) after an allocation inside the scope, minus their value at
+/// entry; zero where nothing allocated beyond the entry level. A scope's peak
+/// includes those of the scopes inside it, which are relative to their own
+/// entry. A node keeps the maximum over its calls and threads: the peaks of
+/// threads running at once are not added. Memory freed on another thread
+/// lowers the live bytes of that one. The wrapper keeps the high-water mark
+/// with a compare and a conditional store per allocation.
+///
+/// Installed by the final binary:
 ///
 /// ```
 /// #[global_allocator]
@@ -37,16 +48,19 @@ impl<A> Alloc<A> {
     }
 }
 
-/// Counters a guard carries: `bytes`, `allocs` and `freed` with the feature
-/// `alloc`, none without, so that a scope costs what it did before.
-pub(crate) const N: usize = if cfg!(feature = "alloc") { 3 } else { 0 };
+/// Counters a guard carries: `bytes`, `allocs`, `freed` and the high-water
+/// mark with the feature `alloc`, none without, so that a scope costs what it
+/// did before.
+pub(crate) const N: usize = if cfg!(feature = "alloc") { 4 } else { 0 };
 
 thread_local! {
-    /// This thread's `bytes`, `allocs` and `freed`.
+    /// This thread's `bytes`, `allocs`, `freed`, and the largest live bytes
+    /// since the innermost open guard (as `i64`).
     static COUNTS: [Cell<u64>; N] = const { [const { Cell::new(0) }; N] };
 }
 
-/// Adds `bytes`, `allocs` and `freed` to this thread's counters.
+/// Adds `bytes`, `allocs` and `freed` to this thread's counters and raises
+/// the high-water mark after an allocation.
 #[inline]
 fn count(add: [u64; 3]) {
     if cfg!(feature = "alloc") {
@@ -54,19 +68,62 @@ fn count(add: [u64; 3]) {
             for (c, v) in c.iter().zip(add) {
                 c.set(c.get().wrapping_add(v));
             }
+            if let ([b, _, f, high], true) = (c.as_slice(), add[0] > 0) {
+                let live = b.get().wrapping_sub(f.get());
+                if live as i64 > high.get() as i64 {
+                    high.set(live);
+                }
+            }
         });
     }
 }
 
-/// This thread's `bytes`, `allocs` and `freed`; zeros where no [`Alloc`] is
-/// installed.
+/// `f` of this thread's counters; zeros without the feature `alloc`.
+#[inline]
+fn on_counts(f: impl FnOnce(&[Cell<u64>; N]) -> [u64; N]) -> [u64; N] {
+    match cfg!(feature = "alloc") {
+        true => COUNTS.try_with(f).unwrap_or([0; N]),
+        false => [0; N],
+    }
+}
+
+/// This thread's counters; zeros where no [`Alloc`] is installed.
 #[inline]
 pub(crate) fn counts() -> [u64; N] {
-    if !cfg!(feature = "alloc") {
-        return [0; N];
-    }
-    let counts = COUNTS.try_with(|c| c.each_ref().map(Cell::get));
-    counts.unwrap_or([0; N])
+    on_counts(|c| c.each_ref().map(Cell::get))
+}
+
+/// This thread's counters at a guard's entry, with the high-water mark
+/// before it; the mark restarts at the live bytes.
+#[inline]
+pub(crate) fn open() -> [u64; N] {
+    on_counts(|c| {
+        let at = c.each_ref().map(Cell::get);
+        if let [b, _, f, high] = c.as_slice() {
+            high.set(b.get().wrapping_sub(f.get()));
+        }
+        at
+    })
+}
+
+/// The differences of `bytes`, `allocs` and `freed` since [`open`] returned
+/// `at`, and the peak; the high-water mark before the guard is raised to the
+/// one inside it.
+#[inline]
+pub(crate) fn close(at: &[u64; N]) -> [u64; N] {
+    on_counts(|c| {
+        let mut d = c.each_ref().map(Cell::get);
+        if let ([b, a, f, high], [b0, a0, f0, high0], [.., mark]) =
+            (&mut d[..], &at[..], c.as_slice())
+        {
+            mark.set((*high as i64).max(*high0 as i64) as u64);
+            *high = high.wrapping_sub(b0.wrapping_sub(*f0));
+            *b = b.wrapping_sub(*b0);
+            *a = a.wrapping_sub(*a0);
+            *f = f.wrapping_sub(*f0);
+        }
+        d
+    })
 }
 
 /// Runs `f` and resets this thread's counters to their values before it: the

@@ -1,10 +1,10 @@
 //! Guards of scopes, contexts and handles, and the handle itself.
 
-use crate::alloc::{counts, quiet, N};
-use crate::context::{Shared, BUSY, BYTES, CALLS, WALL};
+use crate::alloc::{close, open, quiet, N};
+use crate::context::{Shared, BUSY, BYTES, CALLS, PEAK, WALL};
 use crate::site::{registry, MAX};
 use crate::stream::Item;
-use crate::thread::{bump, with_current, Cur, Entry, Thread, IDLE, NONE, THREAD};
+use crate::thread::{bump, raise, with_current, Cur, Entry, Thread, IDLE, NONE, THREAD};
 use crate::Site;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering::Relaxed;
@@ -22,7 +22,7 @@ pub struct Guard {
     cur: Cur,
     prev: Cur,
     start: u64,
-    /// This thread's allocation counters at entry.
+    /// This thread's allocation counters at entry, from [`open`].
     mem: [u64; N],
     kind: Kind,
     _thread: PhantomData<*const ()>,
@@ -59,7 +59,7 @@ impl Guard {
             THREAD
                 .with(|t| {
                     let t = &mut *t.borrow_mut();
-                    let i = t.entry(&shared);
+                    let i = t.entry(&shared, busy);
                     let held = |e: &Entry| e.depth == 0 && e.live.is_some();
                     let other = t.entries.iter_mut().find(|e| held(e) && e.id != shared.id);
                     let released = other.and_then(|e| e.live.take());
@@ -68,7 +68,7 @@ impl Guard {
                 })
                 .0
         });
-        g.mem = counts();
+        g.mem = open();
         g
     }
 }
@@ -116,7 +116,7 @@ impl Site {
                 cur: *cur,
                 prev,
                 start: (e.clock)(),
-                mem: counts(),
+                mem: open(),
                 kind: Kind::Scope,
                 ..Guard::IDLE
             }
@@ -130,7 +130,10 @@ impl Drop for Guard {
         if self.cur.entry == NONE {
             return;
         }
-        let mem = counts();
+        let mem = match self.kind {
+            Kind::Switch => [0; N],
+            _ => close(&self.mem),
+        };
         // The context released on the last drop is dropped after the borrow.
         THREAD.with(|t| {
             let Thread { cur, entries } = &mut *t.borrow_mut();
@@ -149,8 +152,9 @@ impl Drop for Guard {
             let b = e.base(self.cur.node);
             bump(&b[CALLS], (self.kind == Kind::Scope) as u64);
             bump(&b[if self.cur.busy { BUSY } else { WALL }], dt);
-            for (k, m) in mem.iter().enumerate() {
-                bump(&b[BYTES + k], m.wrapping_sub(self.mem[k]));
+            for (k, &m) in mem.iter().enumerate() {
+                let op = if BYTES + k == PEAK { raise } else { bump };
+                op(&b[BYTES + k], m);
             }
             if e.stream {
                 span(e, self.cur.node, self.start, dt);
@@ -255,7 +259,7 @@ impl Handle {
             let e = &mut entries[i];
             if e.live.as_ref().is_some_and(|s| !s.closed.load(Relaxed)) {
                 let mut g = quiet(|| t.open(i, self.node, true));
-                g.mem = counts();
+                g.mem = open();
                 return Ok(g);
             }
             // Held after its context dropped: released after the borrow.

@@ -14,7 +14,7 @@ pub(crate) const NONE: u32 = u32::MAX;
 
 /// One thread's built-in measures of one node, in the order of
 /// [`BUILTIN`](crate::context::BUILTIN).
-pub(crate) type Base = [AtomicU64; 6];
+pub(crate) type Base = [AtomicU64; 7];
 
 /// The current node of a thread.
 #[derive(Clone, Copy)]
@@ -81,6 +81,13 @@ pub(crate) fn bump(c: &AtomicU64, v: u64) {
     c.store(c.load(Relaxed).wrapping_add(v), Relaxed);
 }
 
+#[inline(always)]
+pub(crate) fn raise(c: &AtomicU64, v: u64) {
+    if v > c.load(Relaxed) {
+        c.store(v, Relaxed);
+    }
+}
+
 impl Entry {
     /// The shared state, alive while `depth > 0`.
     pub(crate) fn shared(&self) -> &Arc<Shared> {
@@ -118,7 +125,7 @@ impl Entry {
             });
         }
         if self.nodes[n].base.is_null() {
-            self.nodes[n].base = self.cell(|t, b| t.bases.push((node, b)));
+            self.nodes[n].base = self.cell(|t, b| t.bases.push((self.thread, node, b)));
         }
         // SAFETY: as in `cell`.
         unsafe { &*self.nodes[n].base }
@@ -153,7 +160,7 @@ impl Entry {
     #[cold]
     #[inline(never)]
     fn new_extra(&mut self, node: u32, site: u32) -> *const AtomicU64 {
-        let p = self.cell(|t, b| t.extras.push((node, site, b)));
+        let p = self.cell(|t, b| t.extras.push((self.thread, node, site, b)));
         self.nodes[node as usize].extras.push((site, p));
         p
     }
@@ -194,9 +201,9 @@ impl Entry {
 }
 
 impl Thread {
-    /// Index of this thread's entry of `shared`, created on first use in the
-    /// slot of a dropped context or appended.
-    pub(crate) fn entry(&mut self, shared: &Arc<Shared>) -> usize {
+    /// Index of this thread's entry of `shared`, created on first use (through
+    /// a handle if `busy`) in the slot of a dropped context or appended.
+    pub(crate) fn entry(&mut self, shared: &Arc<Shared>, busy: bool) -> usize {
         if let Some(i) = self.entries.iter().position(|e| e.id == shared.id) {
             return i;
         }
@@ -207,7 +214,7 @@ impl Thread {
             depth: 0,
             clock: shared.cfg.clock,
             active: Vec::new(),
-            thread: lock(&shared.tree).thread(),
+            thread: lock(&shared.tree).thread(busy),
             stream: shared.stream.is_some(),
             items: Vec::new(),
             nodes: Vec::new(),
@@ -264,6 +271,18 @@ impl Site {
     /// [`add!`](crate::add) expands to.
     #[inline]
     pub fn add(&'static self, value: impl FnOnce() -> u64) {
+        self.put(value, bump)
+    }
+
+    /// Raises this site's measure at the current node to `value()`; what
+    /// [`max!`](crate::max) expands to.
+    #[inline]
+    pub fn max(&'static self, value: impl FnOnce() -> u64) {
+        self.put(value, raise)
+    }
+
+    #[inline(always)]
+    fn put(&'static self, value: impl FnOnce() -> u64, op: fn(&AtomicU64, u64)) {
         let cell = self.active(|cur, e, id| (e.stream, cur.node, id, e.extra(cur.node, id)));
         if let Some((stream, node, site, c)) = cell {
             // The value is evaluated outside the borrow, so it may enter
@@ -272,7 +291,7 @@ impl Site {
             // SAFETY: as in `Entry::cell`; the guard that made the entry
             // current outlives this call.
             let c = unsafe { &*c };
-            bump(c, v);
+            op(c, v);
             if stream {
                 count(site, node, c.load(Relaxed));
             }

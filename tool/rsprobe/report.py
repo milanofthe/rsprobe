@@ -11,9 +11,10 @@ BUILTIN = ("calls", "wall", "busy", "self", "cost")
 
 
 def summary(runs):
-    """The corrected nodes and run totals summed over the records."""
+    """The corrected nodes and run totals summed over the records, `max`
+    measures by maximum."""
     parts = [corrected(r) for r in runs]
-    nodes = total(p[0] for p in parts)
+    nodes = total((p[0] for p in parts), set().union(*(r["max"] for r in runs)))
     run = total({(): p[1]} for p in parts)[()]
     return nodes, run
 

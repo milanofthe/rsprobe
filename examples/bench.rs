@@ -6,7 +6,7 @@
 //!     cargo run --release --example bench --features on
 //!     cargo run --release --example bench --features alloc
 
-use rsprobe::{add, current, debug, info, scope, time, Alloc, Context, Handle, Level};
+use rsprobe::{add, current, debug, info, max, scope, time, Alloc, Context, Handle, Level};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::Barrier;
@@ -96,6 +96,27 @@ fn alloc_free(a: &impl GlobalAlloc, size: usize) {
     unsafe { a.dealloc(black_box(a.alloc(l)), l) }
 }
 
+/// Median over rounds of the time per allocation and free of 16 B through
+/// `A` where all `N` blocks are held before the first is freed: every
+/// allocation raises this thread's live bytes to a new high-water mark.
+fn rising() -> f64 {
+    let l = Layout::from_size_align(16, 8).unwrap();
+    let mut held = Vec::with_capacity(N as usize);
+    let mut v: Vec<f64> = (0..ROUNDS)
+        .map(|_| {
+            let t = Instant::now();
+            // SAFETY: a non-zero size; each block is freed with its layout.
+            unsafe {
+                held.extend((0..N).map(|_| black_box(A.alloc(l))));
+                held.drain(..).for_each(|p| A.dealloc(p, l));
+            }
+            t.elapsed().as_nanos() as f64 / N as f64
+        })
+        .collect();
+    v.sort_by(f64::total_cmp);
+    v[ROUNDS / 2]
+}
+
 fn main() {
     println!("{:<40} {:>8}", "case", "ns");
     // Warm-up: the first case timed is otherwise 1 to 3 ns slower.
@@ -110,6 +131,7 @@ fn main() {
             time(1, |_| alloc_free(&A, size)),
         );
     }
+    row("alloc+free 16 B, Alloc, rising peak", rising());
     if cfg!(not(feature = "on")) {
         row("scope, feature off", time(1, flat));
         row("add!, feature off", time(1, |i| add!("n", i)));
@@ -160,6 +182,7 @@ fn main() {
     row("scope, on, flat", time(1, flat));
     row("scope, on, nested 4 deep", time(4, nested));
     row("add!, on", time(1, |i| add!("n", i)));
+    row("max!, on, rising", time(1, |i| max!("m", i)));
     row("message, below the threshold", time(1, |i| debug!("{i}")));
     row("message, on, no sink", time(1, |i| info!("{i}")));
     {

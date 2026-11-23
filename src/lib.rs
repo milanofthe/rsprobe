@@ -5,8 +5,10 @@
 //! additive `u64` measures: `calls`, `wall` and `busy` in nanoseconds, the
 //! counts added with [`add!`], the times added with [`time!`] and, with the
 //! feature `alloc` where the binary installs [`Alloc`], `bytes`, `allocs` and
-//! `freed`. [`Context::record`] sums the threads and returns a [`Record`] that
-//! writes itself as JSON.
+//! `freed`. Levels set with [`max!`] and the allocator's `peak` are merged by
+//! maximum instead. [`Context::record`] merges the threads and returns a
+//! [`Record`] that writes itself as JSON; [`Context::record_threads`] adds
+//! each thread's values.
 //!
 //! ```
 //! let ctx = rsprobe::Context::new();
@@ -42,7 +44,8 @@
 //!
 //! With the feature `alloc` every guard reads this thread's [`Alloc`] counters
 //! on entry and on exit and adds the differences to its node, inclusive like
-//! time. Without it a guard carries no counters: they cost 1.5 to 7 ns per
+//! time, and `peak`, the high-water mark of this thread's live bytes inside
+//! the scope (see [`Alloc`]). Without it a guard carries no counters: they cost 1.5 to 7 ns per
 //! scope on x86-64 (examples/bench.rs). The allocations of
 //! rsprobe itself (a node's first use on a thread, the calibration) are not
 //! counted.
@@ -90,12 +93,12 @@ pub use bridge::{LogSink, Logger};
 pub use context::{now, Builder, Clock, Context};
 pub use events::{Event, Kind};
 pub use guard::{current, Guard, Handle};
-pub use record::{Calibration, Node, Param, Record};
+pub use record::{Calibration, Node, Param, Record, ThreadNodes};
 pub use sinks::{Buffer, Path, Sink, Stderr};
 pub use site::{Level, Site};
 
-/// Version of the record's JSON layout.
-const SCHEMA: u32 = 1;
+/// Version of the record's JSON layout: 2 adds the measure kind `max`.
+const SCHEMA: u32 = 2;
 
 /// Calibration: empty scopes timed after a pass of the same count that warms
 /// the caches. A scope costs 45 ns with the default clock (examples/bench.rs
@@ -195,6 +198,23 @@ macro_rules! time {
         $crate::on_or!(
             { $crate::site!($level, $name, noisy).add(|| $ns as u64) }
             { if false { let _ = $ns; } }
+        )
+    };
+}
+
+/// Raises a level measure at the current node to a value: `max!("slots",
+/// n)` or `max!(DEBUG, "slots", n)`. The node keeps the largest value given
+/// on any thread; nested and repeated scopes do not add up. As [`add!`]
+/// otherwise; the record declares the measure `max`.
+#[macro_export]
+macro_rules! max {
+    ($name:expr, $value:expr) => {
+        $crate::max!(INFO, $name, $value)
+    };
+    ($level:ident, $name:expr, $value:expr) => {
+        $crate::on_or!(
+            { $crate::site!($level, $name, maximum).max(|| $value as u64) }
+            { if false { let _ = $value; } }
         )
     };
 }
