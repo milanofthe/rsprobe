@@ -68,6 +68,7 @@ pub(crate) struct Entry {
 
 /// This thread's cells of one node and the children it has seen.
 struct Local {
+    /// Null until this thread uses the node.
     base: *const Base,
     /// (scope site, child node).
     children: Vec<(u32, u32)>,
@@ -96,31 +97,31 @@ impl Entry {
         p
     }
 
-    /// This thread's base cells of `node`, allocated with those of the nodes
-    /// before it on first use.
+    /// This thread's base cells of `node`, allocated on first use.
     #[inline]
     pub(crate) fn base(&mut self, node: u32) -> &Base {
         match self.nodes.get(node as usize) {
             // SAFETY: as in `cell`.
-            Some(l) => unsafe { &*l.base },
-            None => self.grow(node),
+            Some(l) if !l.base.is_null() => unsafe { &*l.base },
+            _ => self.new_base(node),
         }
     }
 
     #[cold]
-    fn grow(&mut self, node: u32) -> &Base {
-        while self.nodes.len() <= node as usize {
-            let n = self.nodes.len() as u32;
-            let base = self.cell(|t, b| t.bases.push((n, b)));
-            let (children, extras) = (Vec::new(), Vec::new());
-            self.nodes.push(Local {
-                base,
-                children,
-                extras,
+    fn new_base(&mut self, node: u32) -> &Base {
+        let n = node as usize;
+        if self.nodes.len() <= n {
+            self.nodes.resize_with(n + 1, || Local {
+                base: std::ptr::null(),
+                children: Vec::new(),
+                extras: Vec::new(),
             });
         }
+        if self.nodes[n].base.is_null() {
+            self.nodes[n].base = self.cell(|t, b| t.bases.push((node, b)));
+        }
         // SAFETY: as in `cell`.
-        unsafe { &*self.nodes[node as usize].base }
+        unsafe { &*self.nodes[n].base }
     }
 
     /// The child of `node` for a scope site, interned on first use.
@@ -222,9 +223,7 @@ impl Thread {
             }
         }
     }
-}
 
-impl Thread {
     /// The current node, the current entry and the site id if `site` is
     /// active in the current context.
     #[inline(always)]
