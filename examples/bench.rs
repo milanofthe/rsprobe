@@ -1,0 +1,78 @@
+//! Nanoseconds per scope and per `add!`, the median of rounds, next to the
+//! calibration constants of a context.
+//!
+//!     cargo run --release --example bench                 # feature off
+//!     cargo run --release --example bench --features on
+
+use rsprobe::{add, scope, Context, Level};
+use std::hint::black_box;
+use std::time::Instant;
+
+/// Rounds per case; the median is printed.
+const ROUNDS: usize = 21;
+/// Iterations per round: about 1 to 5 ms per round at the measured costs.
+const N: u32 = 100_000;
+
+/// Median over rounds of the time per call of `f`, in ns.
+fn time(per: u32, f: impl Fn(u32)) -> f64 {
+    let mut v: Vec<f64> = (0..ROUNDS)
+        .map(|_| {
+            let t = Instant::now();
+            for i in 0..N {
+                f(black_box(i));
+            }
+            t.elapsed().as_nanos() as f64 / (N * per) as f64
+        })
+        .collect();
+    v.sort_by(f64::total_cmp);
+    v[ROUNDS / 2]
+}
+
+fn row(case: &str, ns: f64) {
+    println!("{case:<40} {ns:>8.2}");
+}
+
+fn flat(_: u32) {
+    let _s = scope!("flat");
+}
+
+fn nested(_: u32) {
+    let _a = scope!("n1");
+    let _b = scope!("n2");
+    let _c = scope!("n3");
+    let _d = scope!("n4");
+}
+
+fn main() {
+    println!("{:<40} {:>8}", "case", "ns");
+    if cfg!(not(feature = "on")) {
+        row("scope, feature off", time(1, flat));
+        row("add!, feature off", time(1, |i| add!("n", i)));
+        return;
+    }
+    row("scope, no context", time(1, flat));
+    let ctx = Context::with(Level::INFO, rsprobe::now);
+    let _on = ctx.enter();
+    row(
+        "scope, below the threshold",
+        time(1, |_| {
+            let _s = scope!(DEBUG, "fine");
+        }),
+    );
+    {
+        let _other = Context::with(Level::TRACE, rsprobe::now);
+        row(
+            "scope, below this context, other at TRACE",
+            time(1, |_| {
+                let _s = scope!(DEBUG, "fine");
+            }),
+        );
+    }
+    row("scope, on, flat", time(1, flat));
+    row("scope, on, nested 4 deep", time(4, nested));
+    row("add!, on", time(1, |i| add!("n", i)));
+    let c = ctx.record().calibration;
+    row("calibration inner", c.inner_ns);
+    row("calibration outer", c.outer_ns);
+    row("calibration inner + outer", c.inner_ns + c.outer_ns);
+}
