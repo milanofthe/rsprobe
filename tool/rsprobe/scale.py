@@ -1,6 +1,7 @@
-"""`scale`: records over a run parameter, a problem size or a thread count."""
+"""`scale`: records over a run parameter, a problem size or a thread count,
+or each node over a measure of its own."""
 
-from .constants import DEPARTURE, MIN_FIT_POINTS
+from .constants import DEPARTURE, FOLLOWS, MIN_FIT_POINTS
 from .overhead import corrected, domain
 from .records import name, preorder
 from .stats import karp_flatt, local_exponent, median, power_fit
@@ -46,11 +47,8 @@ def fits(runs, by):
         if None in vs:
             continue
         time = domain(vs[-1])
-        for m in [time, "calls"] + sorted(exact & set(vs[-1])):
-            y = [v.get(m, 0) for v in vs]
-            if min(y) <= 0:
-                continue
-            c, e, q, res = power_fit(n, y)
+        for m, c, e, q, res in node_fits(n, vs, [time, "calls"]
+                                         + sorted(exact & set(vs[-1]))):
             rows.append((p, m, c, e, q, res))
             if m == time:
                 local[p] = (local_exponent(e, q, n[-1]), vs[-1]["self"])
@@ -60,6 +58,50 @@ def fits(runs, by):
                if p and abs(x - run) > DEPARTURE]
     return {"n": n, "rows": rows, "run": run, "dominant": dominant,
             "departs": departs}
+
+
+def node_fits(n, vs, measures):
+    """(measure, c, p, q, residual) of the fit of c n^p log^q(n) to each of
+    the measures over a node's values vs at n; a measure zero or absent at
+    any point is not fitted."""
+    out = []
+    for m in measures:
+        y = [v.get(m, 0) for v in vs]
+        if min(y) > 0:
+            out.append((m,) + power_fit(n, y))
+    return out
+
+
+def by_measure(runs, unit):
+    """Per node the fit of c x^p log^q(x) (stats.power_fit) to its time in
+    its domain, its calls and its other exact and program-added noisy
+    measures over x, the node's own measure `unit`, one point per record
+    that has unit at the node. Returns a dict: `rows` (path, measure,
+    points, c, p, q, residual), `skipped` (path, reason) for nodes without
+    unit or with fewer than MIN_FIT_POINTS distinct values of it, and
+    `poor` (path, residual), the nodes whose time's residual exceeds
+    FOLLOWS."""
+    recs = [corrected(r)[0] for r in runs]
+    other = (set().union(*(r["exact"] | r["noisy"] for r in runs))
+             - {"wall", "busy", "calls", unit})
+    out = {"rows": [], "skipped": [], "poor": []}
+    for p in preorder([p for nodes in recs for p in nodes]):
+        vs = sorted((nodes[p] for nodes in recs
+                     if nodes.get(p, {}).get(unit, 0) > 0),
+                    key=lambda v: v[unit])
+        x = [v[unit] for v in vs]
+        if len(set(x)) < MIN_FIT_POINTS:
+            out["skipped"].append((p, "%d values" % len(set(x)) if x
+                                   else "absent"))
+            continue
+        time = domain(vs[-1])
+        for m, c, e, q, res in node_fits(
+                x, vs, [time, "calls"]
+                + sorted(other & {m for v in vs for m in v})):
+            out["rows"].append((p, m, len(x), c, e, q, res))
+            if m == time and res > FOLLOWS:
+                out["poor"].append((p, res))
+    return out
 
 
 def threads(runs, by):
@@ -86,8 +128,8 @@ def threads(runs, by):
     return {"t0": t0, "rows": rows}
 
 
-def model(p, q):
-    return "n^%.2f%s" % (p, " log n" if q else "")
+def model(p, q, x="n"):
+    return "%s^%.2f%s" % (x, p, " log %s" % x if q else "")
 
 
 def text(runs, by):
@@ -121,4 +163,26 @@ def text_threads(runs, by):
         out.append("  %-32s %7g %10.3f %8.2f %9.1f%% %9.3f %6s" % (
             name(p), n, wall / 1e6, s, 100 * e, f,
             "%.1f%%" % (100 * wait) if wait is not None else ""))
+    return "\n".join(out)
+
+
+def text_measure(runs, unit):
+    f = by_measure(runs, unit)
+    out = ["%d records, per node against its own %s: c x^p log^q(x) by least "
+           "squares in log space over the records that have it, residual "
+           "the rms of ln y." % (len(runs), unit),
+           "  %-32s %-12s %6s %10s %-16s %9s" % (
+               "node", "measure", "points", "c", "model", "residual")]
+    for p, m, k, c, e, q, res in f["rows"]:
+        out.append("  %-32s %-12s %6d %10.3g %-16s %9.3f" % (
+            name(p), m, k, c, model(e, q, "x"), res))
+    absent = [name(p) for p, why in f["skipped"] if why == "absent"]
+    few = ["%s (%s)" % (name(p), why) for p, why in f["skipped"]
+           if why != "absent"]
+    out.append("skipped: without %s %s; fewer than %d values %s" % (
+        unit, ", ".join(absent) or "none", MIN_FIT_POINTS,
+        ", ".join(few) or "none"))
+    out.append("time not following %s, residual above %g: %s" % (
+        unit, FOLLOWS, ", ".join("%s (%.3f)" % (name(p), r)
+                                 for p, r in f["poor"]) or "none"))
     return "\n".join(out)

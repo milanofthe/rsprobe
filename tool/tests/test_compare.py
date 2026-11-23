@@ -108,6 +108,24 @@ class Compare(unittest.TestCase):
                     records(self.d, "b", 0, 0.01, 2, extra=True))
         self.assertEqual(c["structure"], [(("new",), "B")])
 
+    def test_busy_alone_does_not_fail_the_default_gate(self):
+        # a pool whose workers wait longer: busy 30 percent up, wall equal
+        def pool(prefix, busy, seed):
+            rng = random.Random(seed)
+            return load_set([write(self.d, "%s%02d.json" % (prefix, k), {
+                (): {"wall": round(1e6 * rng.gauss(1, 0.01))},
+                ("pool",): {"calls": 1, "wall": round(1e6 * rng.gauss(1, 0.01)),
+                            "busy": round(busy * rng.gauss(1, 0.01))}})
+                for k in range(ROUNDS)])
+        a, b = pool("a", 4e6, 1), pool("b", 5.2e6, 2)
+        c = compare(a, b)
+        self.assertEqual(self.verdict(c, ("pool",), "busy"), "slower")
+        self.assertEqual(c["gate"], [])
+        self.assertIn("gate rule: fails where a node of at least 5% of the run "
+                      "is slower beyond the band in wall;", text(c))
+        c = compare(a, b, gate=("wall", "busy"))
+        self.assertEqual(c["gate"], [(("pool",), "busy")])
+
     def test_too_few_rounds(self):
         a = records(self.d, "a", 0, 0.01, 1)[:2]
         c = compare(a, records(self.d, "b", 0.5, 0.01, 2)[:2])
