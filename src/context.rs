@@ -299,13 +299,20 @@ impl Site {
         if self.level.0 > MAX.load(Relaxed) {
             return;
         }
-        THREAD.with(|t| {
+        let cell = THREAD.with(|t| {
             let t = &mut *t.borrow_mut();
             let node = t.cur.node;
-            if let Some(e) = t.active(self) {
-                bump(e.extra(node, self.id(true)), value());
-            }
-        })
+            let e = t.active(self)?;
+            Some(e.extra(node, self.id(true)) as *const AtomicU64)
+        });
+        if let Some(c) = cell {
+            // The value is evaluated outside the borrow, so it may enter
+            // scopes itself.
+            let v = value();
+            // SAFETY: as in `Entry::base`; the guard that made the entry
+            // current outlives this call.
+            bump(unsafe { &*c }, v);
+        }
     }
 }
 

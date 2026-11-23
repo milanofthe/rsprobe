@@ -67,9 +67,10 @@ const SCHEMA: u32 = 1;
 #[cfg(feature = "on")]
 const CALIBRATION_ROUNDS: u32 = 8;
 
-/// Calibration: empty scopes per round. On the benchmark machines a scope
-/// costs 20 to 60 ns, so a round is 10 to 30 us, far above the 42 ns clock
-/// resolution of Apple Silicon and short enough to fit between interrupts.
+/// Calibration: empty scopes per round. A scope costs 45 ns with the default
+/// clock (examples/bench.rs on a Ryzen 9 9900X under Linux and on an Apple
+/// M3), so a round takes about 23 us: 550 ticks of the 42 ns clock of Apple
+/// Silicon, and short against the interval between interrupts.
 #[cfg(feature = "on")]
 const CALIBRATION_SCOPES: u32 = 512;
 

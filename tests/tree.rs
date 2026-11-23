@@ -20,6 +20,10 @@ fn nested_and_repeated_scopes() {
         }
         let _b = scope!("b");
         leaf();
+        add!("nested", {
+            leaf();
+            1
+        });
     }
     let r = ctx.record();
     let calls = |p: &[&str]| r.nodes[r.find(p).unwrap() as usize].get("calls");
@@ -27,7 +31,8 @@ fn nested_and_repeated_scopes() {
     assert_eq!(calls(&["a"]), 3);
     assert_eq!(calls(&["a", "leaf"]), 6);
     assert_eq!(calls(&["b"]), 1);
-    assert_eq!(calls(&["b", "leaf"]), 1);
+    assert_eq!(calls(&["b", "leaf"]), 2);
+    assert_eq!(r.nodes[r.find(&["b"]).unwrap() as usize].get("nested"), 1);
     assert_eq!(
         r.nodes[r.find(&["a", "leaf"]).unwrap() as usize].get("items"),
         12
