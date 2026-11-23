@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 from rsprobe.__main__ import main
+from rsprobe import scale
 from rsprobe.compare import compare
 from rsprobe.records import load_set
 from rsprobe.report import rows
@@ -35,20 +36,20 @@ class RoundTrip(unittest.TestCase):
     def setUpClass(cls):
         cls.dir = tempfile.TemporaryDirectory()
         cls.sets = {}
-        for n in (1000, 1500):
-            d = os.path.join(cls.dir.name, str(n))
+        for n, t in ((1000, 2), (1500, 2), (500, 2), (1000, 1)):
+            d = os.path.join(cls.dir.name, "%d-%d" % (n, t))
             os.makedirs(d)
             for k in range(3):
-                subprocess.run([BIN, str(n), "2"], check=True, env=dict(
+                subprocess.run([BIN, str(n), str(t)], check=True, env=dict(
                     os.environ, RSPROBE_RECORD=os.path.join(d, "%d.json" % k)))
-            cls.sets[n] = d
+            cls.sets[n, t] = d
 
     @classmethod
     def tearDownClass(cls):
         cls.dir.cleanup()
 
     def test_report(self):
-        rs, run_ = rows(load_set([self.sets[1000]]))
+        rs, run_ = rows(load_set([self.sets[1000, 2]]))
         got = {"/".join(r["path"]): r for r in rs}
         self.assertEqual(list(got), ["", "assemble", "sort", "solve",
                                      "solve/iteration", "pairs", "pairs/task"])
@@ -57,22 +58,37 @@ class RoundTrip(unittest.TestCase):
         self.assertEqual(got["pairs/task"]["domain"], "busy")
         self.assertGreater(got["pairs"]["ratios"]["busy/wall"], 0)
         self.assertGreater(run_["wall"], 0)
-        code, out = run("report", self.sets[1000])
+        code, out = run("report", self.sets[1000, 2])
         self.assertEqual(code, 0)
         self.assertIn("ns/iterations", out)
-        code, out = run("report", "--folded", self.sets[1000])
+        code, out = run("report", "--folded", self.sets[1000, 2])
         self.assertTrue(out.startswith("run"))
 
     def test_compare(self):
-        c = compare(load_set([self.sets[1000]]), load_set([self.sets[1500]]))
+        c = compare(load_set([self.sets[1000, 2]]), load_set([self.sets[1500, 2]]))
         self.assertEqual(c["exact"], [
             (("assemble",), "nonzeros", 1000, 1500),
             (("pairs", "task"), "differences", 1000 ** 2, 1500 ** 2)])
         self.assertEqual(c["nondeterministic"], [])
         self.assertEqual(c["structure"], [])
-        code, out = run("compare", self.sets[1000], self.sets[1500])
+        code, out = run("compare", self.sets[1000, 2], self.sets[1500, 2])
         self.assertIn(code, (0, 1))
         self.assertIn("nonzeros     1000 -> 1500", out)
+
+    def test_scale(self):
+        sizes = [self.sets[n, 2] for n in (500, 1000, 1500)]
+        r = scale.fits(load_set(sizes), "n")
+        self.assertEqual(r["n"], [500, 1000, 1500])
+        got = {(p, m): e for p, m, c, e, q, res in r["rows"]}
+        self.assertAlmostEqual(got[("pairs", "task"), "differences"], 2)
+        self.assertAlmostEqual(got[("assemble",), "nonzeros"], 1)
+        code, out = run("scale", "--by", "n", *sizes)
+        self.assertEqual(code, 0)
+        self.assertIn("3 points per fit", out)
+        threads = [self.sets[1000, 1], self.sets[1000, 2]]
+        code, out = run("scale", "--by", "threads", "--threads", *threads)
+        self.assertEqual(code, 0)
+        self.assertIn("pairs", out)
 
     def test_ab(self):
         out_dir = os.path.join(self.dir.name, "ab")

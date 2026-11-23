@@ -83,6 +83,22 @@ round 10/10 aa 0.005 s
 records in /tmp/rsprobe-ab-x1y2
 ```
 
+`scale RECORD... --by PARAM`: records over a numeric run parameter, rounds of one value reduced to their median. Per node a least-squares fit of `c n^p log^q(n)` (q in 0, 1) in log space to the time, the calls and each exact measure, with the residual; the scopes whose local exponent at the largest n departs by more than 0.1 from that of the node with the largest self time are named. Fewer than three values are refused. With `--threads` the parameter is a thread count: speedup, efficiency, Karp-Flatt serial fraction and waiting share per node.
+
+```
+15 records over n = 1000 2000 4000 8000 16000: 5 points per fit, c n^p log^q(n) by least squares in log space, residual the rms of ln y.
+  node                             measure               c model             residual
+  sort                             wall               2.43 n^0.94 log n         0.245
+  solve/iteration                  wall               1.15 n^0.88 log n         0.005
+  pairs/task                       busy               0.18 n^1.92 log n         0.016
+  pairs/task                       differences           1 n^2.00               0.000
+dominant: pairs/task, local exponent 2.02 at n = 16000 (largest self time); departing by more than 0.1: assemble (1.10), sort (1.05), solve (0.98), solve/iteration (0.99), pairs (1.85)
+
+  node                             threads    wall ms  speedup efficiency    serial   wait
+  pairs                                  4     13.698     3.30      82.6%     0.070   6.2%
+  pairs                                  8      9.906     4.57      57.1%     0.107  22.6%
+```
+
 ## License
 
 MIT

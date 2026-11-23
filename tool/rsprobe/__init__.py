@@ -1,1 +1,1 @@
-"""Reads rsprobe run records: report, compare and ab."""
+"""Reads rsprobe run records: report, compare, ab and scale."""
