@@ -1,6 +1,7 @@
 //! Sinks: where the events of a context go.
 
-use crate::context::{lock, Shared};
+use crate::context::Shared;
+use crate::site::lock;
 use crate::{Event, Kind};
 use std::fmt::{self, Display, Formatter};
 use std::io::{IsTerminal, Write};

@@ -75,19 +75,22 @@ mod alloc;
 mod bridge;
 mod context;
 mod events;
+mod guard;
 mod record;
 mod sinks;
+mod site;
 mod stream;
+mod thread;
 
 pub use alloc::Alloc;
 #[cfg(feature = "log")]
 pub use bridge::{LogSink, Logger};
-pub use context::{current, now, Builder, Clock, Context, Guard, Handle};
+pub use context::{now, Builder, Clock, Context};
 pub use events::{Event, Kind};
+pub use guard::{current, Guard, Handle};
 pub use record::{Calibration, Node, Param, Record};
 pub use sinks::{Buffer, Path, Sink, Stderr};
-
-use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+pub use site::{Level, Site};
 
 /// Version of the record's JSON layout.
 const SCHEMA: u32 = 1;
@@ -98,83 +101,11 @@ const SCHEMA: u32 = 1;
 /// 0.2 ms. The constants are means over the pass: on Apple Silicon the clock
 /// ticks every 42 ns, about the cost of a scope, and a minimum over short
 /// rounds was measured to return an inner constant of 0.
-#[cfg(feature = "on")]
 const CALIBRATION_SCOPES: u32 = 4096;
 
 /// Distinct events at WARN and above a context keeps for its record; further
 /// ones are counted as dropped.
 const WARNINGS: usize = 100;
-
-/// Importance of a call site. A site is active when its level is at most the
-/// threshold of the current context.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct Level(u8);
-
-impl Level {
-    /// Errors.
-    pub const ERROR: Level = Level(1);
-    /// Warnings.
-    pub const WARN: Level = Level(2);
-    /// Phases of a run; the default level of a site and threshold of a context.
-    pub const INFO: Level = Level(3);
-    /// Finer scopes, per section.
-    pub const DEBUG: Level = Level(4);
-    /// Finest scopes, per iteration.
-    pub const TRACE: Level = Level(5);
-
-    /// Lower-case name, as written in the record.
-    pub fn name(self) -> &'static str {
-        ["off", "error", "warn", "info", "debug", "trace"][self.0 as usize]
-    }
-}
-
-/// A call site: one static per macro expansion, given a dense id on first use.
-/// The id indexes the sites of the record and the per-thread decision whether
-/// the site is active.
-#[derive(Debug)]
-pub struct Site {
-    /// Scope or measure name; empty for an event site.
-    pub name: &'static str,
-    /// `module_path!()` of the expansion.
-    pub module: &'static str,
-    /// `file!()` of the expansion.
-    pub file: &'static str,
-    /// `line!()` of the expansion.
-    pub line: u32,
-    /// Level against the context's threshold.
-    pub level: Level,
-    /// Id plus one; zero until registered.
-    id: AtomicU32,
-}
-
-impl Site {
-    /// A site that is not yet registered.
-    pub const fn new(
-        name: &'static str,
-        module: &'static str,
-        file: &'static str,
-        line: u32,
-        level: Level,
-    ) -> Site {
-        Site {
-            name,
-            module,
-            file,
-            line,
-            level,
-            id: AtomicU32::new(0),
-        }
-    }
-
-    /// The id, registered on first use.
-    #[inline]
-    fn id(&'static self) -> u32 {
-        match self.id.load(Relaxed) {
-            0 => alloc::quiet(|| context::register(self)),
-            id => id - 1,
-        }
-    }
-}
 
 /// The static call site of one macro expansion, as `&'static Site`.
 #[doc(hidden)]
