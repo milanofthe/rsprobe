@@ -53,9 +53,10 @@ pub struct Node {
     pub parent: Option<u32>,
     /// Scope site id; `None` for the root.
     pub site: Option<u32>,
-    /// Summed values per measure name: `calls`, `wall`, `busy` (ns), `bytes`,
-    /// `allocs`, `freed` where any node has them, then the user measures
-    /// present at this node.
+    /// Values per measure name, summed or for those in [`Record::max`] the
+    /// maximum: `calls`, `wall`, `busy` (ns), `bytes`, `allocs`, `freed`,
+    /// `peak` where any node has them, then the user measures present at
+    /// this node.
     pub values: Vec<(&'static str, u64)>,
 }
 
@@ -67,6 +68,19 @@ impl Node {
             .find(|v| v.0 == measure)
             .map_or(0, |v| v.1)
     }
+}
+
+/// One thread's values: [`Node`]s by the ids of [`Record::nodes`], the
+/// measures this thread has not touched zero or absent.
+#[derive(Clone, Debug)]
+pub struct ThreadNodes {
+    /// Index of the thread in order of first entry, as in the trace.
+    pub index: u32,
+    /// Entered first through a [`Handle`](crate::Handle), else through the
+    /// [`Context`](crate::Context).
+    pub handle: bool,
+    /// This thread's values by node id.
+    pub nodes: Vec<Node>,
 }
 
 /// What [`Context::record`](crate::Context::record) returns; `Display` writes
@@ -81,6 +95,11 @@ pub struct Record {
     pub threads: u32,
     /// Measures present, with `true` for exact and `false` for noisy.
     pub measures: Vec<(&'static str, bool)>,
+    /// Measures merged by maximum: `peak` and those of [`max!`](crate::max).
+    pub max: Vec<&'static str>,
+    /// Per thread its values; empty but from
+    /// [`Context::record_threads`](crate::Context::record_threads).
+    pub per_thread: Vec<ThreadNodes>,
     /// Scope sites the nodes refer to, by id.
     pub sites: Vec<(u32, &'static Site)>,
     /// Nodes by id; node 0 is the root.
@@ -174,7 +193,11 @@ impl Display for Record {
             self.threads
         )?;
         list(f, &self.measures, |f, &(name, exact)| {
-            let kind = if exact { "exact" } else { "noisy" };
+            let kind = match exact {
+                _ if self.max.contains(&name) => "max",
+                true => "exact",
+                false => "noisy",
+            };
             write!(f, "{}:\"{kind}\"", Str(name))
         })?;
         f.write_str("},\"sites\":[")?;
@@ -190,14 +213,29 @@ impl Display for Record {
             )
         })?;
         f.write_str("],\"nodes\":[")?;
-        list(f, self.nodes.iter().enumerate(), |f, (i, n)| {
-            let (parent, site) = (opt(n.parent), opt(n.site));
-            write!(
-                f,
-                "{{\"id\":{i},\"parent\":{parent},\"site\":{site},\"values\":{{"
-            )?;
+        let values = |f: &mut Formatter, n: &Node| {
+            f.write_str("\"values\":{")?;
             list(f, &n.values, |f, (m, v)| write!(f, "{}:{v}", Str(m)))?;
             f.write_str("}}")
+        };
+        list(f, self.nodes.iter().enumerate(), |f, (i, n)| {
+            let (parent, site) = (opt(n.parent), opt(n.site));
+            write!(f, "{{\"id\":{i},\"parent\":{parent},\"site\":{site},")?;
+            values(f, n)
+        })?;
+        if !self.per_thread.is_empty() {
+            f.write_str("],\"per_thread\":[")?;
+        }
+        list(f, &self.per_thread, |f, t| {
+            let (i, h) = (t.index, t.handle);
+            write!(f, "{{\"index\":{i},\"handle\":{h},\"nodes\":[")?;
+            let used = t.nodes.iter().enumerate();
+            let used = used.filter(|n| n.1.values.iter().any(|v| v.1 > 0));
+            list(f, used, |f, (i, n)| {
+                write!(f, "{{\"id\":{i},")?;
+                values(f, n)
+            })?;
+            f.write_str("]}")
         })?;
         f.write_str("],\"warnings\":[")?;
         list(f, &self.warnings, |f, (e, count)| {

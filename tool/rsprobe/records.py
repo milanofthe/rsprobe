@@ -3,8 +3,9 @@
 import json
 import os
 
-# Version of the record's JSON layout this tool reads.
-SCHEMA = 1
+# Versions of the record's JSON layout this tool reads: 2 adds the measure
+# kind `max`.
+SCHEMAS = (1, 2)
 
 
 class Scope(str):
@@ -32,17 +33,19 @@ class Scope(str):
 
 def load(path):
     """A record file as a dict: `file`, `params`, `inner` and `outer` (the
-    calibration constants in ns), `threads`, `exact` and `noisy` (the names
-    of the exact and the noisy measures), `nodes`, {path: {measure: value}}, `warnings`, a list of
+    calibration constants in ns), `threads`, `exact`, `noisy` and `max` (the
+    names of the exact, the noisy and the maximum measures), `nodes`, {path: {measure: value}}, `warnings`, a list of
     (path, level, text, count), and `warnings_dropped`. A path is the tuple of
     scopes (`Scope`) from the root, () for the root; sibling scopes of the
-    same module and name from different call sites are summed into one node,
-    in a record and across records."""
+    same module and name from different call sites are merged into one node
+    (summed, `max` measures by maximum), in a record and across records."""
     with open(path) as f:
         doc = json.load(f)
-    if doc.get("schema") != SCHEMA:
-        raise ValueError("%s: record schema %r, this tool reads %d"
-                         % (path, doc.get("schema"), SCHEMA))
+    if doc.get("schema") not in SCHEMAS:
+        raise ValueError("%s: record schema %r, this tool reads %s"
+                         % (path, doc.get("schema"), SCHEMAS))
+    kinds = doc["measures"]
+    maxima = {m for m, k in kinds.items() if k == "max"}
     names = {s["id"]: Scope(s["name"], s["module"]) for s in doc["sites"]}
     by_id = {n["id"]: n for n in doc["nodes"]}
 
@@ -51,11 +54,7 @@ def load(path):
             return ()
         return path_of(by_id[n["parent"]]) + (names[n["site"]],)
 
-    nodes = {}
-    for n in doc["nodes"]:
-        v = nodes.setdefault(path_of(n), {})
-        for m, x in n["values"].items():
-            v[m] = v.get(m, 0) + x
+    nodes = total(({path_of(n): n["values"]} for n in doc["nodes"]), maxima)
     c = doc["calibration"]
     return {
         "file": path,
@@ -63,8 +62,9 @@ def load(path):
         "inner": c["inner_ns"] or 0.0,
         "outer": c["outer_ns"] or 0.0,
         "threads": doc["threads"],
-        "exact": {m for m, k in doc["measures"].items() if k == "exact"},
-        "noisy": {m for m, k in doc["measures"].items() if k == "noisy"},
+        "exact": {m for m, k in kinds.items() if k == "exact"},
+        "noisy": {m for m, k in kinds.items() if k == "noisy"},
+        "max": maxima,
         "nodes": nodes,
         "warnings": [(path_of(by_id[w["node"]]), w["level"], w["text"],
                       w["count"]) for w in doc.get("warnings", [])],
@@ -87,15 +87,15 @@ def load_set(args):
     return [load(f) for f in files]
 
 
-def total(trees):
-    """{path: {measure: value}} summed over trees: measures are additive, so
-    this merges rounds as it merges threads."""
+def total(trees, maxima=()):
+    """{path: {measure: value}} merged over trees, the measures in `maxima`
+    by maximum and the others summed, as the crate merges threads."""
     out = {}
     for t in trees:
         for p, v in t.items():
             o = out.setdefault(p, {})
             for m, x in v.items():
-                o[m] = o.get(m, 0) + x
+                o[m] = max(o.get(m, 0), x) if m in maxima else o.get(m, 0) + x
     return out
 
 

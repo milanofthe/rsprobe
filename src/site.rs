@@ -45,6 +45,9 @@ pub struct Site {
     /// For a measure site: exact (a count, [`add!`](crate::add)) or noisy (a
     /// time, [`time!`](crate::time)).
     pub exact: bool,
+    /// For a measure site: merged by maximum ([`max!`](crate::max)) instead
+    /// of summed; `exact` is true.
+    pub max: bool,
     /// Id plus one; zero until registered.
     id: AtomicU32,
 }
@@ -66,6 +69,7 @@ impl Site {
             line,
             level,
             exact: true,
+            max: false,
             id,
         }
     }
@@ -73,6 +77,12 @@ impl Site {
     /// This site as a noisy measure.
     pub const fn noisy(mut self) -> Site {
         self.exact = false;
+        self
+    }
+
+    /// This site as a measure merged by maximum.
+    pub const fn maximum(mut self) -> Site {
+        self.max = true;
         self
     }
 

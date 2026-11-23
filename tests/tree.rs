@@ -129,7 +129,7 @@ fn record_parses_and_round_trips() {
     }
     let r = ctx.record();
     let v: serde_json::Value = serde_json::from_str(&r.to_string()).unwrap();
-    assert_eq!(v["schema"], 1);
+    assert_eq!(v["schema"], 2);
     assert_eq!(v["params"]["n"].as_f64(), Some(1000.0));
     assert_eq!(v["params"]["tol"].as_f64(), Some(1e-9));
     assert_eq!(v["params"]["case"], "a \"quoted\"\nname");

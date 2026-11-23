@@ -2,7 +2,7 @@
 
 use crate::alloc::quiet;
 use crate::events::Warnings;
-use crate::record::{Calibration, Node, Param, Record};
+use crate::record::{Calibration, Node, Param, Record, ThreadNodes};
 use crate::site::{lock, registry, Registry};
 use crate::stream::Stream;
 use crate::thread::{Base, NONE, THREAD};
@@ -16,20 +16,32 @@ use std::sync::{Arc, Mutex};
 pub type Clock = fn() -> u64;
 
 /// Built-in measures, exact or not; user measures follow by name, of the kind
-/// of their first site. The last three are the counters of [`Alloc`](
-/// crate::Alloc), omitted from a record where they are zero at every node.
-const BUILTIN: [(&str, bool); 6] = [
+/// of their first site. The last four are the counters of [`Alloc`](
+/// crate::Alloc), omitted from a record where they are zero at every node;
+/// `peak` is merged by maximum.
+const BUILTIN: [(&str, bool); 7] = [
     ("calls", true),
     ("wall", false),
     ("busy", false),
     ("bytes", true),
     ("allocs", true),
     ("freed", true),
+    ("peak", true),
 ];
 pub(crate) const CALLS: usize = 0;
 pub(crate) const WALL: usize = 1;
 pub(crate) const BUSY: usize = 2;
 pub(crate) const BYTES: usize = 3;
+pub(crate) const PEAK: usize = 6;
+
+/// Two values of a measure merged: by maximum or summed.
+fn merge(max: bool, a: u64, b: u64) -> u64 {
+    if max {
+        a.max(b)
+    } else {
+        a + b
+    }
+}
 
 /// The default clock: `std::time::Instant` since the first read in the
 /// process. On wasm32 none, every time is zero: the host passes its own clock
@@ -59,10 +71,12 @@ pub(crate) struct Tree {
     /// (parent, site) per node id; the root is (NONE, NONE).
     keys: Vec<(u32, u32)>,
     index: BTreeMap<(u32, u32), u32>,
-    pub(crate) bases: Vec<(u32, Box<Base>)>,
-    /// (node, `add!` site, value) of user measures.
-    pub(crate) extras: Vec<(u32, u32, Box<AtomicU64>)>,
-    threads: u32,
+    /// (thread, node, cells).
+    pub(crate) bases: Vec<(u32, u32, Box<Base>)>,
+    /// (thread, node, measure site, value) of user measures.
+    pub(crate) extras: Vec<(u32, u32, u32, Box<AtomicU64>)>,
+    /// Per thread in order of first entry: whether through a handle.
+    handles: Vec<bool>,
     params: Vec<(String, Param)>,
 }
 
@@ -77,10 +91,11 @@ impl Tree {
         c
     }
 
-    /// The index of a thread entering the context for the first time.
-    pub(crate) fn thread(&mut self) -> u32 {
-        self.threads += 1;
-        self.threads - 1
+    /// The index of a thread entering the context for the first time,
+    /// through a handle if `handle`.
+    pub(crate) fn thread(&mut self, handle: bool) -> u32 {
+        self.handles.push(handle);
+        self.handles.len() as u32 - 1
     }
 
     /// The name of the scope of `node`; `root` for the root.
@@ -187,7 +202,7 @@ impl Builder {
                 index: BTreeMap::new(),
                 bases: Vec::new(),
                 extras: Vec::new(),
-                threads: 0,
+                handles: Vec::new(),
                 params: Vec::new(),
             }),
             warnings: Mutex::default(),
@@ -255,11 +270,21 @@ impl Context {
     /// `on` the scope cost is calibrated here, with this context's clock and
     /// the processor in the state the run left it in.
     pub fn record(&self) -> Record {
+        self.take(false)
+    }
+
+    /// [`record`](Self::record) with [`Record::per_thread`], each thread's
+    /// values by node.
+    pub fn record_threads(&self) -> Record {
+        self.take(true)
+    }
+
+    fn take(&self, per_thread: bool) -> Record {
         let calibration = match cfg!(feature = "on") {
             true => quiet(|| calibrate(self.shared.cfg.clock)),
             false => Calibration::default(),
         };
-        self.sums(calibration)
+        self.sums(calibration, per_thread)
     }
 
     /// The stream as Chrome trace event JSON, as read by Perfetto, speedscope
@@ -282,30 +307,40 @@ impl Context {
         s.write(|n| t.name(&r, n), |m| r.name(m))
     }
 
-    /// [`record`](Self::record) with the given calibration constants.
-    fn sums(&self, calibration: Calibration) -> Record {
+    /// [`record`](Self::record) with the given calibration constants, and
+    /// with each thread's values if `per_thread`.
+    fn sums(&self, calibration: Calibration, per_thread: bool) -> Record {
         let (t, r) = (lock(&self.shared.tree), registry());
-        let node = |&(p, s): &(u32, u32)| Node {
-            parent: (p != NONE).then_some(p),
-            site: (s != NONE).then_some(s),
-            values: BUILTIN.iter().map(|m| (m.0, 0)).collect(),
+        // The nodes with the cells of the threads `of` accepts merged.
+        let merged = |of: &dyn Fn(u32) -> bool| {
+            let node = |&(p, s): &(u32, u32)| Node {
+                parent: (p != NONE).then_some(p),
+                site: (s != NONE).then_some(s),
+                values: BUILTIN.iter().map(|m| (m.0, 0)).collect(),
+            };
+            let mut nodes: Vec<Node> = t.keys.iter().map(node).collect();
+            for (_, n, b) in t.bases.iter().filter(|c| of(c.0)) {
+                let values = nodes[*n as usize].values.iter_mut();
+                for (i, (v, c)) in values.zip(b.iter()).enumerate() {
+                    v.1 = merge(i == PEAK, v.1, c.load(Relaxed));
+                }
+            }
+            for (_, n, s, c) in t.extras.iter().filter(|c| of(c.0)) {
+                let site = r.sites[*s as usize];
+                let (name, values) = (site.name, &mut nodes[*n as usize].values);
+                match values.iter_mut().find(|v| v.0 == name) {
+                    Some(v) => v.1 = merge(site.max, v.1, c.load(Relaxed)),
+                    None => values.push((name, c.load(Relaxed))),
+                }
+            }
+            nodes
         };
-        let mut nodes: Vec<Node> = t.keys.iter().map(node).collect();
-        for (n, b) in &t.bases {
-            for (v, c) in nodes[*n as usize].values.iter_mut().zip(b.iter()) {
-                v.1 += c.load(Relaxed);
-            }
-        }
-        let mut measures = BUILTIN.to_vec();
-        for (n, s, c) in &t.extras {
-            let site = r.sites[*s as usize];
-            let (name, values) = (site.name, &mut nodes[*n as usize].values);
-            match values.iter_mut().find(|v| v.0 == name) {
-                Some(v) => v.1 += c.load(Relaxed),
-                None => values.push((name, c.load(Relaxed))),
-            }
-            if !measures.iter().any(|m| m.0 == name) {
-                measures.push((name, site.exact));
+        let mut nodes = merged(&|_| true);
+        let (mut measures, mut max) = (BUILTIN.to_vec(), vec![BUILTIN[PEAK].0]);
+        for site in t.extras.iter().map(|c| r.sites[c.2 as usize]) {
+            if !measures.iter().any(|m| m.0 == site.name) {
+                measures.push((site.name, site.exact));
+                max.extend(site.max.then_some(site.name));
             }
         }
         let unused: Vec<&str> = BUILTIN[BYTES..]
@@ -313,10 +348,25 @@ impl Context {
             .map(|m| m.0)
             .filter(|&m| nodes.iter().all(|n| n.get(m) == 0))
             .collect();
-        for n in &mut nodes {
-            n.values.retain(|v| !unused.contains(&v.0));
-        }
+        let strip = |nodes: &mut Vec<Node>| {
+            for n in nodes {
+                n.values.retain(|v| !unused.contains(&v.0));
+            }
+        };
+        strip(&mut nodes);
         measures.retain(|m| !unused.contains(&m.0));
+        max.retain(|m| !unused.contains(m));
+        let threads = t.handles.iter().enumerate().filter(|_| per_thread);
+        let per_thread = threads.map(|(i, &handle)| {
+            let mut nodes = merged(&|th| th == i as u32);
+            strip(&mut nodes);
+            let index = i as u32;
+            ThreadNodes {
+                index,
+                handle,
+                nodes,
+            }
+        });
         let mut sites: Vec<u32> = t.keys[1..].iter().map(|k| k.1).collect();
         sites.sort_unstable();
         sites.dedup();
@@ -326,8 +376,10 @@ impl Context {
             warnings_dropped: w.dropped,
             params: t.params.clone(),
             calibration,
-            threads: t.threads,
+            threads: t.handles.len() as u32,
+            per_thread: per_thread.collect(),
             measures,
+            max,
             sites: sites
                 .into_iter()
                 .map(|s| (s, r.sites[s as usize]))
@@ -354,7 +406,7 @@ fn calibrate(clock: Clock) -> Calibration {
                 let _s = crate::scope!(ERROR, "empty");
             }
         }
-        let r = ctx.sums(Calibration::default());
+        let r = ctx.sums(Calibration::default(), false);
         *w = (r.nodes[1].get("wall"), r.nodes[2].get("wall"));
     }
     let n = crate::CALIBRATION_SCOPES as f64;

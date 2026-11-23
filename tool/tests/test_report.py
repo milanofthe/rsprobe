@@ -103,7 +103,7 @@ class Report(unittest.TestCase):
         path = write(self.dir.name, "s.json", NODES)
         with open(path) as f:
             doc = json.load(f)
-        doc["schema"] = 2
+        doc["schema"] = 3
         with open(path, "w") as f:
             json.dump(doc, f)
         with self.assertRaises(ValueError):

@@ -31,12 +31,15 @@ let _on = ctx.enter();
     let _s = rsprobe::scope!("factor");
     rsprobe::add!("nnz", nnz);          // an exact measure: a count
     rsprobe::time!(DEBUG, "wait", ns);  // a noisy one: a time measured by the caller
+    rsprobe::max!("slots", slots);      // a level: the node keeps the largest value
     let _d = rsprobe::scope!(DEBUG, "pivot");
 }
 println!("{}", ctx.record()); // one JSON document
 ```
 
-With the feature `alloc` the binary installs the counting allocator, which adds `bytes`, `allocs` and `freed` to every scope; without the feature it only forwards:
+Measures of `add!` and `time!` are summed over calls, threads and records; those of `max!` are merged by maximum, so a level (slots, code size, a peak) does not add up over nested or repeated scopes. The record tags each measure `exact`, `noisy` or `max`.
+
+With the feature `alloc` the binary installs the counting allocator, which adds `bytes`, `allocs` and `freed` to every scope, and `peak`: per thread, the largest live bytes (allocated minus freed) after an allocation inside the scope, minus the live bytes at its entry, so a scope's peak includes those of the scopes inside it; a node keeps the maximum over calls and threads. Without the feature it only forwards:
 
 ```rust
 #[global_allocator]
@@ -52,6 +55,8 @@ pool.run(|| {
     let _s = rsprobe::scope!("task");
 });
 ```
+
+`ctx.record()` merges the threads; `ctx.record_threads()` adds `per_thread`, per thread its index, whether it entered through the context or a handle, and its values by node: the allocations of the calling thread in a scope apart from those of the pool, the busy time of each worker.
 
 A worker keeps the context it entered through a handle until it enters another one or ends, so the next task of the same context writes nothing shared with other threads; a dropped context's tree is freed when the last worker holding it moves on. `rsprobe::active!(DEBUG)` says whether a site at that level would record on this thread, so a caller reads a clock for a `time!` value only then.
 
