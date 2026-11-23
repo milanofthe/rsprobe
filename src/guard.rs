@@ -24,8 +24,20 @@ pub struct Guard {
     start: u64,
     /// This thread's allocation counters at entry.
     mem: [u64; N],
-    scope: bool,
+    kind: Kind,
     _thread: PhantomData<*const ()>,
+}
+
+/// What a guard records on drop.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    /// A scope: one call and its span.
+    Scope,
+    /// A context or a handle entered on a thread: its span.
+    Enter,
+    /// A handle entered where its context is current already: nothing, the
+    /// span lies inside one this thread is timing.
+    Switch,
 }
 
 impl Guard {
@@ -35,7 +47,7 @@ impl Guard {
         prev: IDLE,
         start: 0,
         mem: [0; N],
-        scope: false,
+        kind: Kind::Enter,
         _thread: PhantomData,
     };
 
@@ -89,7 +101,7 @@ impl Site {
                 prev,
                 start: (e.clock)(),
                 mem: counts(),
-                scope: true,
+                kind: Kind::Scope,
                 ..Guard::IDLE
             }
         })
@@ -107,13 +119,19 @@ impl Drop for Guard {
         THREAD.with(|t| {
             let Thread { cur, entries } = &mut *t.borrow_mut();
             let e = &mut entries[self.cur.entry as usize];
-            // A scope that outlives the guard of its context records nothing.
-            if self.scope && (cur.entry != self.cur.entry || e.id != self.ctx) {
+            // A scope or a switch that outlives the guard of its context
+            // records nothing.
+            let inner = self.kind != Kind::Enter;
+            if inner && (cur.entry != self.cur.entry || e.id != self.ctx) {
+                return None;
+            }
+            if self.kind == Kind::Switch {
+                *cur = self.prev;
                 return None;
             }
             let dt = (e.clock)().saturating_sub(self.start);
             let b = e.base(self.cur.node);
-            bump(&b[CALLS], self.scope as u64);
+            bump(&b[CALLS], (self.kind == Kind::Scope) as u64);
             bump(&b[if self.cur.busy { BUSY } else { WALL }], dt);
             for (k, m) in mem.iter().enumerate() {
                 bump(&b[BYTES + k], m.wrapping_sub(self.mem[k]));
@@ -122,7 +140,7 @@ impl Drop for Guard {
                 span(e, self.cur.node, self.start, dt);
             }
             *cur = self.prev;
-            if self.scope {
+            if self.kind == Kind::Scope {
                 return None;
             }
             e.depth -= 1;
@@ -171,14 +189,41 @@ pub fn current() -> Handle {
 }
 
 impl Handle {
-    /// Makes this node current on this thread until the guard drops. Scopes
-    /// entered meanwhile hang under it and add their time to `busy`. Records
-    /// nothing if the context has been dropped.
+    /// Makes this node current on this thread until the guard drops; scopes
+    /// entered meanwhile hang under it. On a thread where the handle's
+    /// context is not current (a pool's worker) their time and the guard's
+    /// own span are `busy` of their nodes. Where it is current already (the
+    /// thread that issued the work runs it itself) only the node changes:
+    /// the time stays in the measure this thread records and the guard adds
+    /// no span, as an open guard of this thread covers it. Records nothing
+    /// if the context has been dropped.
     #[inline]
     pub fn enter(self) -> Guard {
         // No context, or the feature absent: nothing to look up.
         if cfg!(not(feature = "on")) || self.ctx == 0 {
             return Guard::IDLE;
+        }
+        let switched = THREAD.with(|t| {
+            let Thread { cur, entries } = &mut *t.borrow_mut();
+            let e = entries.get_mut(cur.entry as usize)?;
+            if e.id != self.ctx {
+                return None;
+            }
+            let prev = *cur;
+            quiet(|| {
+                e.base(self.node);
+            });
+            cur.node = self.node;
+            Some(Guard {
+                ctx: e.id,
+                cur: *cur,
+                prev,
+                kind: Kind::Switch,
+                ..Guard::IDLE
+            })
+        });
+        if let Some(g) = switched {
+            return g;
         }
         // A context this thread has entered is looked up without a lock.
         let local = THREAD.with(|t| {

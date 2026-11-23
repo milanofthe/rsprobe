@@ -58,7 +58,8 @@ fn threads_and_handles_sum_under_their_node() {
                 });
             }
         });
-        // Inline on the entering thread, as a pool runs a task on its caller.
+        // Inline on the entering thread, as a pool runs a task on its caller:
+        // the node only, its time stays wall of this thread.
         let _g = h.enter();
         leaf();
     }
@@ -66,7 +67,6 @@ fn threads_and_handles_sum_under_their_node() {
     let leaf = &r.nodes[r.find(&["par", "leaf"]).unwrap() as usize];
     assert_eq!(leaf.get("calls"), 41);
     assert_eq!(leaf.get("items"), 82);
-    assert_eq!(leaf.get("wall"), 0);
     assert_eq!(r.nodes.len(), 3);
     assert_eq!(r.threads, 5);
 }
@@ -176,4 +176,26 @@ fn guards_dropped_out_of_order_leave_no_context_current() {
     let r = ctx.record();
     assert_eq!(r.nodes.len(), 1);
     assert!(r.find(&["after"]).is_none());
+}
+
+#[test]
+fn a_handle_entered_where_its_context_is_current_only_moves_the_node() {
+    let ctx = Context::new();
+    let on = ctx.enter();
+    {
+        let _a = scope!("a");
+        let h = current();
+        let _b = scope!("b");
+        // the issuing thread runs a task of `a` itself, while under `b`
+        let _task = h.enter();
+        let _t = scope!("task");
+    }
+    drop(on);
+    let r = ctx.record();
+    let (a, t) = (r.find(&["a"]).unwrap(), r.find(&["a", "task"]).unwrap());
+    assert!(r.find(&["a", "b", "task"]).is_none());
+    assert_eq!(r.nodes[a as usize].get("calls"), 1);
+    assert_eq!(r.nodes[t as usize].get("calls"), 1);
+    assert_eq!(r.nodes[a as usize].get("busy"), 0);
+    assert_eq!(r.nodes[t as usize].get("busy"), 0);
 }
