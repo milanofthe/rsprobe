@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from rsprobe.ab import case
+from rsprobe.ab import case, schedule
 
 from .test_roundtrip import run
 
@@ -44,13 +44,26 @@ class Cases(unittest.TestCase):
         self.assertIn("round 3/3 large b", text)
         lines = text.splitlines()
         at = [i for i, x in enumerate(lines) if x.startswith("case")][0]
-        rows = [x.split() for x in lines[at + 1:]]
+        rows = [x.split() for x in lines[at + 1:-1]]
         # B takes twice A's time at every size: run wall in ms, B/A 2.
         self.assertEqual(rows[0][:4], ["small", "0.010", "0.020", "2.000"])
         self.assertEqual(rows[1][:4], ["large", "0.100", "0.200", "2.000"])
         self.assertEqual([r[6:] for r in rows],
                          [["slower", "0", "fails", "on", "(run)", "wall"]] * 2)
         self.assertEqual(len(os.listdir(os.path.join(out, "large", "b"))), 3)
+
+    def test_order_rotates(self):
+        arms = ["a", "b", "aa"]
+        s = schedule(12, arms)
+        self.assertEqual(s, schedule(12, arms))
+        for order in s:
+            self.assertEqual(sorted(order), sorted(arms))
+        # each block of three rounds puts every arm once in every position
+        for k in range(0, 12, 3):
+            for i in range(3):
+                self.assertEqual(sorted(o[i] for o in s[k:k + 3]), sorted(arms))
+        self.assertGreater(len({tuple(o) for o in s}), 1)
+        self.assertNotEqual(s, schedule(12, arms, seed=2))
 
     def test_case_syntax(self):
         self.assertEqual(case("n=1000 --threads 4"),

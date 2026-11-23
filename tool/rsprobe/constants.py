@@ -42,3 +42,21 @@ LOG_POWERS = (0, 1)
 # largest n differ by more than this. Three points over a factor of 10 at
 # 5 percent timing noise give a slope error of 0.03; 0.1 is three of them.
 DEPARTURE = 0.1
+
+# Measures that fail the gate of compare and ab unless --gate adds others:
+# wall is the elapsed time a user waits for. busy also grows where a worker
+# waits (a task parked until a decision) without anything running slower, and
+# a time! measure is the program's own reading; both get a verdict only.
+GATE = ("wall",)
+
+# Seed of the arm order of ab, so that the same rounds run in the same order.
+AB_SEED = 1
+
+# Depth of critical: the phase's chain and the chain inside each of its
+# elements, a pool's tasks and the scopes inside a task.
+CRITICAL_DEPTH = 2
+
+# Residual (rms of ln y) above which scale --by-measure flags a node's time
+# as not following the measure. Timing noise of 10 percent per run gives an
+# rms of about 0.1; 0.25 is two and a half times that, a factor of 1.28.
+FOLLOWS = 0.25

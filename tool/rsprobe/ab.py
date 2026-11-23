@@ -1,10 +1,13 @@
 """`ab`: two commands run alternately, each writing one record per round."""
 
 import os
+import random
 import shlex
 import subprocess
 import tempfile
 import time
+
+from .constants import AB_SEED
 
 
 def case(text):
@@ -15,11 +18,24 @@ def case(text):
     return name, shlex.split(args)
 
 
+def schedule(rounds, arms, seed=AB_SEED):
+    """The order of the arms in each round: rotations of arms, in blocks of
+    len(arms) rounds that hold each rotation once, in an order drawn per block
+    with the seed. Over a whole block each arm runs once in each position."""
+    rng = random.Random(seed)
+    out = []
+    while len(out) < rounds:
+        shifts = list(range(len(arms)))
+        rng.shuffle(shifts)
+        out += [arms[k:] + arms[:k] for k in shifts]
+    return out[:rounds]
+
+
 def run(rounds, argv, aa, out=None, cases=()):
     """Runs `CMD_A :: CMD_B` (argv split at '::') alternately for the given
-    rounds, A, B and with aa A again, each with RSPROBE_RECORD set to its
-    record's path under out (a new temporary directory by default), and
-    prints a line per finished run. With cases, (NAME, ARGS) pairs, a round
+    rounds, A, B and with aa A again, in the order of schedule printed per
+    round, each with RSPROBE_RECORD set to its record's path under out (a
+    new temporary directory by default), and prints a line per finished run. With cases, (NAME, ARGS) pairs, a round
     runs each case in turn, its ARGS appended to both commands and its
     records under out/NAME. Returns {case: (a, b, aa)}, the set directories
     (aa None without aa), with the one case "" without cases."""
@@ -37,9 +53,12 @@ def run(rounds, argv, aa, out=None, cases=()):
             for arm, _ in arms}
     for d in dirs.values():
         os.makedirs(d, exist_ok=True)
-    for k in range(rounds):
+    for k, order in enumerate(schedule(rounds, arms)):
+        print("round %d/%d order %s" % (k + 1, rounds,
+                                        " ".join(arm for arm, _ in order)),
+              flush=True)
         for c, args in cases:
-            for arm, cmd in arms:
+            for arm, cmd in order:
                 path = os.path.join(dirs[c, arm], "%04d.json" % k)
                 t = time.perf_counter()
                 subprocess.run(cmd + args, check=True,

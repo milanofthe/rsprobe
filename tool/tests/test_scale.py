@@ -106,5 +106,51 @@ class Threads(unittest.TestCase):
         self.assertEqual(sorted(got), [2, 4, 8])
 
 
+class ByMeasure(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_time_against_the_nodes_own_measure(self):
+        # Runs of different kinds: per record `factor` takes 3 ns per
+        # nonzero at 2 percent noise, while `other` takes a time drawn
+        # independently of its ops; `rest` has no measure. The run's size
+        # (here n) does not order either.
+        rng = random.Random(5)
+        paths = []
+        for k in range(12):
+            nnz = rng.randrange(10 ** 4, 10 ** 6)
+            ops = rng.randrange(10 ** 4, 10 ** 6)
+            f = round(3 * nnz * rng.gauss(1, 0.02))
+            o = round(rng.uniform(1e5, 1e7))
+            paths.append(write(self.dir.name, "%02d.json" % k, {
+                (): {"wall": f + o + 1000},
+                ("factor",): {"calls": 1, "wall": f, "nonzeros": nnz},
+                ("other",): {"calls": 1, "wall": o, "nonzeros": ops},
+                ("rest",): {"calls": 1, "wall": 1000}},
+                params={"n": rng.randrange(100)}))
+        r = scale.by_measure(load_set(paths), "nonzeros")
+        got = {(p, m): (k, c, e, q, res) for p, m, k, c, e, q, res in r["rows"]}
+        k, c, e, q, res = got[("factor",), "wall"]
+        self.assertEqual(k, 12)
+        self.assertLess(abs(e + q / math.log(10 ** 5) - 1), 0.05)
+        self.assertLess(res, 0.05)
+        self.assertEqual([p for p, _ in r["poor"]], [("other",)])
+        self.assertEqual(r["skipped"], [((), "absent"), (("rest",), "absent")])
+        out = scale.text_measure(load_set(paths), "nonzeros")
+        self.assertIn("time not following nonzeros, residual above 0.25: "
+                      "other", out)
+
+    def test_fewer_than_three_values_are_skipped(self):
+        paths = [write(self.dir.name, "%d.json" % k, {
+            (): {"wall": 10}, ("a",): {"calls": 1, "wall": 10, "ops": k + 1}})
+            for k in range(2)]
+        r = scale.by_measure(load_set(paths), "ops")
+        self.assertEqual(r["rows"], [])
+        self.assertIn((("a",), "2 values"), r["skipped"])
+
+
 if __name__ == "__main__":
     unittest.main()

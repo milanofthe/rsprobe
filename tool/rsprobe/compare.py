@@ -2,7 +2,7 @@
 
 import math
 
-from .constants import CONFIDENCE, GATE_SHARE, MIN_EFFECT, MIN_ROUNDS
+from .constants import CONFIDENCE, GATE, GATE_SHARE, MIN_EFFECT, MIN_ROUNDS
 from .overhead import corrected, share
 from .records import name, preorder
 from .stats import median, ratio_ci
@@ -29,13 +29,14 @@ def series(rounds, p, x):
     return [nodes.get(p, {}).get(x, 0) for nodes, _ in rounds]
 
 
-def compare(a, b, aa=None):
+def compare(a, b, aa=None, gate=GATE):
     """The comparison of record sets a and b (lists of loaded records), with
     aa a second set of a's build for the noise band. Noisy measures added by
-    the program (`time!`) are compared as wall and busy are; only wall and
-    busy, the run's time, fail the gate. Returns a dict:
+    the program (`time!`) are compared as wall and busy are; a slower verdict
+    fails the gate only for the measures in gate. Returns a dict:
     `exact`, `nondeterministic`, `structure` and `noisy` lists, `band`
-    (the band's source) and `gate` (the nodes failing the gate)."""
+    (the band's source), `gated` (the measures of the gate) and `gate` (the
+    nodes and measures failing it)."""
     A, B = [corrected(r) for r in a], [corrected(r) for r in b]
     AA = (A, [corrected(r) for r in aa]) if aa else None
     exact = set().union(*(r["exact"] for r in a + b))
@@ -43,7 +44,8 @@ def compare(a, b, aa=None):
     in_a = {p for nodes, _ in A for p in nodes}
     in_b = {p for nodes, _ in B for p in nodes}
     out = {"exact": [], "nondeterministic": [], "structure": [], "noisy": [],
-           "gate": [], "rounds": (len(a), len(b)),
+           "gate": [], "gated": list(dict.fromkeys(gate)),
+           "rounds": (len(a), len(b)),
            "band": "A/A, %d records" % len(aa) if aa else "bootstrap alone"}
     for p in preorder([p for nodes, _ in A + B for p in nodes]):
         if (p in in_a) != (p in in_b):
@@ -75,7 +77,7 @@ def compare(a, b, aa=None):
                        "faster" if hi < math.exp(-w) else "within noise")
             out["noisy"].append((p, x, median(va), median(vb), r, lo, hi,
                                  verdict, sh))
-            if verdict == "slower" and sh >= GATE_SHARE and timed:
+            if verdict == "slower" and sh >= GATE_SHARE and x in gate:
                 out["gate"].append((p, x))
     return out
 
@@ -103,9 +105,17 @@ def text(c):
             100 * sh, verdict))
     out.append("gate: %s" % (
         "fails on " + ", ".join("%s %s" % (name(p), x) for p, x in c["gate"])
-        if c["gate"] else "passes: no node of at least %g%% of the run slower "
-        "beyond the band" % (100 * GATE_SHARE)))
+        if c["gate"] else "passes"))
+    out.append(rule(c))
     return "\n".join(out)
+
+
+def rule(c):
+    """The gate's rule as a footer line."""
+    return ("gate rule: fails where a node of at least %g%% of the run is "
+            "slower beyond the band in %s; other measures get a verdict "
+            "only, --gate MEASURE adds one"
+            % (100 * GATE_SHARE, ", ".join(c["gated"])))
 
 
 def table(cases):
@@ -127,4 +137,6 @@ def table(cases):
             "fails on " + ", ".join("%s %s" % (name(p), x)
                                     for p, x in c["gate"])
             if c["gate"] else "passes"))
+    if cases:
+        out.append(rule(cases[0][1]))
     return "\n".join(out)

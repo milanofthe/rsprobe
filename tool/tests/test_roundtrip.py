@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from rsprobe.__main__ import main
-from rsprobe import scale
+from rsprobe import critical, scale
 from rsprobe.compare import compare
 from rsprobe.records import load_set
 from rsprobe.report import rows
@@ -92,6 +92,28 @@ class RoundTrip(unittest.TestCase):
         code, out = run("scale", "--by", "threads", "--threads", *threads)
         self.assertEqual(code, 0)
         self.assertIn("pairs", out)
+
+    def test_critical(self):
+        path = os.path.join(self.dir.name, "trace.json")
+        subprocess.run([BIN, "1000", "3"], check=True, env=dict(
+            os.environ, RSPROBE_TRACE=path,
+            RSPROBE_RECORD=os.path.join(self.dir.name, "traced.json")))
+        c = critical.critical(critical.load(path), "pairs")[0]
+        inst = c["instance"]
+        self.assertEqual(inst["tid"], 0)
+        tasks = [r for r in c["rows"] if r[1] == ("pairs", "task")]
+        # the tasks run concurrently: the chain holds the one ending last
+        self.assertEqual(len(tasks), 1)
+        self.assertNotEqual(tasks[0][2], 0)
+        elapsed = inst["end"] - inst["start"]
+        self.assertEqual(sum(d for level, _, _, _, d, _ in c["rows"]
+                             if level == 1), elapsed)
+        self.assertEqual(sum(t for _, t in c["totals"]), elapsed)
+        code, out = run("critical", path)
+        self.assertEqual(code, 0)
+        self.assertEqual([x.split(":")[0] for x in out.splitlines()
+                          if not x.startswith(" ")],
+                         ["assemble", "sort", "solve", "pairs"])
 
     def test_ab(self):
         out_dir = os.path.join(self.dir.name, "ab")
