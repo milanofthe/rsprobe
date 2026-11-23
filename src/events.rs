@@ -74,10 +74,10 @@ impl Warnings {
 }
 
 /// Emits the event `kind()` at `node` of `shared` from the thread of index
-/// `thread`. `kind` is called outside the thread-local state. The event is kept among the warnings if
-/// its level is WARN or above, in the stream if there is one, and passed to
-/// every sink. Its allocations, and those of the sinks, are not counted by
-/// [`Alloc`](crate::Alloc).
+/// `thread`; `kind` is called outside the thread-local state. The event is
+/// kept among the warnings if its level is WARN or above, in the stream if
+/// there is one, and passed to every sink. Its allocations, and those of the
+/// sinks, are not counted by [`Alloc`](crate::Alloc).
 pub(crate) fn emit(
     (shared, node, thread): (Arc<Shared>, u32, u32),
     (level, module, file, line): (Level, &'static str, &'static str, u32),
