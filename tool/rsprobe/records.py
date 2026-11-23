@@ -35,7 +35,9 @@ def load(path):
     """A record file as a dict: `file`, `params`, `inner` and `outer` (the
     calibration constants in ns), `threads`, `exact`, `noisy` and `max` (the
     names of the exact, the noisy and the maximum measures), `nodes`, {path: {measure: value}}, `warnings`, a list of
-    (path, level, text, count), and `warnings_dropped`. A path is the tuple of
+    (path, level, text, count), `warnings_dropped`, and `per_thread`, per
+    thread of a record taken with `record_threads` a dict of `index`,
+    `handle` and `nodes` as above (empty otherwise). A path is the tuple of
     scopes (`Scope`) from the root, () for the root; sibling scopes of the
     same module and name from different call sites are merged into one node
     (summed, `max` measures by maximum), in a record and across records."""
@@ -69,6 +71,11 @@ def load(path):
         "warnings": [(path_of(by_id[w["node"]]), w["level"], w["text"],
                       w["count"]) for w in doc.get("warnings", [])],
         "warnings_dropped": doc.get("warnings_dropped", 0),
+        "per_thread": [
+            {"index": t["index"], "handle": t["handle"],
+             "nodes": total(({path_of(by_id[n["id"]]): n["values"]}
+                             for n in t["nodes"]), maxima)}
+            for t in doc.get("per_thread", [])],
     }
 
 

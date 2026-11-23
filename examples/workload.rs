@@ -1,10 +1,10 @@
 //! A small nested workload over a problem size and a thread count. It writes
 //! its record to the file named by `RSPROBE_RECORD`, else to stdout; the tool's
-//! round-trip tests read it.
+//! round-trip tests read it, with each thread's values.
 //!
 //!     cargo run --example workload --features on -- N THREADS
 
-use rsprobe::{add, current, now, scope, time, Context};
+use rsprobe::{add, current, max, now, scope, time, Context};
 use std::hint::black_box;
 
 /// Problem size when not given.
@@ -45,6 +45,7 @@ fn pairs(v: &[f64], threads: usize) -> f64 {
     let _s = scope!("pairs");
     let h = current();
     let chunk = v.len().div_ceil(threads);
+    max!("chunk", chunk);
     std::thread::scope(|s| {
         let tasks: Vec<_> = v
             .chunks(chunk)
@@ -82,7 +83,7 @@ fn main() {
         black_box(solve(&v));
         black_box(pairs(&v, threads));
     }
-    let record = ctx.record().to_string();
+    let record = ctx.record_threads().to_string();
     match std::env::var_os("RSPROBE_RECORD") {
         Some(path) => std::fs::write(path, record).expect("writing the record"),
         None => println!("{record}"),
