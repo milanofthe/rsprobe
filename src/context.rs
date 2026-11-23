@@ -550,33 +550,29 @@ impl Context {
     }
 }
 
-/// Times empty scopes in a context of its own: the fastest round gives the
-/// elapsed time an empty scope records (inner) and the cost per scope its
-/// parent sees beyond that (outer).
+/// Times empty scopes in a context of its own: the mean elapsed time an empty
+/// scope records (inner) and the mean cost per scope its parent sees beyond
+/// that (outer).
 #[cfg(feature = "on")]
 fn calibrate(clock: Clock) -> Calibration {
-    use crate::{CALIBRATION_ROUNDS, CALIBRATION_SCOPES};
     let ctx = Context::build(Level::TRACE, clock, Calibration::default());
     let _on = ctx.enter();
-    let (mut inner, mut total, mut last) = (u64::MAX, u64::MAX, (0, 0));
-    for round in 0..=CALIBRATION_ROUNDS {
+    let mut walls = [(0, 0); 2];
+    for w in &mut walls {
         {
             let _parent = crate::scope!(ERROR, "calibration");
-            for _ in 0..CALIBRATION_SCOPES {
+            for _ in 0..crate::CALIBRATION_SCOPES {
                 let _s = crate::scope!(ERROR, "empty");
             }
         }
         let r = ctx.record();
-        let now = (r.nodes[1].get("wall"), r.nodes[2].get("wall"));
-        if round > 0 {
-            total = total.min(now.0 - last.0);
-            inner = inner.min(now.1 - last.1);
-        }
-        last = now;
+        *w = (r.nodes[1].get("wall"), r.nodes[2].get("wall"));
     }
-    let n = CALIBRATION_SCOPES as f64;
+    let n = crate::CALIBRATION_SCOPES as f64;
+    let inner = (walls[1].1 - walls[0].1) as f64 / n;
+    let total = (walls[1].0 - walls[0].0) as f64 / n;
     Calibration {
-        inner_ns: inner as f64 / n,
-        outer_ns: total.saturating_sub(inner) as f64 / n,
+        inner_ns: inner,
+        outer_ns: total - inner,
     }
 }

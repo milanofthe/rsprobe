@@ -61,18 +61,14 @@ use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 /// Version of the record's JSON layout.
 const SCHEMA: u32 = 1;
 
-/// Calibration: rounds of empty scopes; the fastest round gives the
-/// constants, which drops rounds hit by an interrupt or a migration. The first
-/// round warms the caches and is not used.
+/// Calibration: empty scopes timed after a pass of the same count that warms
+/// the caches. A scope costs 45 ns with the default clock (examples/bench.rs
+/// on a Ryzen 9 9900X under Linux and on an Apple M3), so a pass takes about
+/// 0.2 ms. The constants are means over the pass: on Apple Silicon the clock
+/// ticks every 42 ns, about the cost of a scope, and a minimum over short
+/// rounds was measured to return an inner constant of 0.
 #[cfg(feature = "on")]
-const CALIBRATION_ROUNDS: u32 = 8;
-
-/// Calibration: empty scopes per round. A scope costs 45 ns with the default
-/// clock (examples/bench.rs on a Ryzen 9 9900X under Linux and on an Apple
-/// M3), so a round takes about 23 us: 550 ticks of the 42 ns clock of Apple
-/// Silicon, and short against the interval between interrupts.
-#[cfg(feature = "on")]
-const CALIBRATION_SCOPES: u32 = 512;
+const CALIBRATION_SCOPES: u32 = 4096;
 
 /// Importance of a call site. A site is active when its level is at most the
 /// threshold of the current context.
