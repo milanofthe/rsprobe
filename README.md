@@ -89,7 +89,7 @@ std::fs::write("solve.trace.json", ctx.trace())?;
 
 `tool/` reads records: a Python package, standard library only, Python 3.9+. Run it as `python -m rsprobe <command>` from `tool/`, or install it with `pip install ./tool`. A set of records is a record file or a directory of them; several records of a report are summed.
 
-`report RECORD...`: the tree with the scope cost subtracted (`X' = X - calls inner - (scope instances below) (inner + outer)`, from the record's calibration), self time, the share of the run, the estimated scope cost per node (`!` above 10 percent), and per node the time per unit of each exact measure, each noisy one (`time!`) in ms and as a share of the node's time, and busy over wall. The warnings the records collected follow the tree, with their count and node. Sibling scopes are matched by module and name. `--folded` writes folded stacks for a flame graph, `--json` the rows.
+`report RECORD...`: the tree with the scope cost subtracted (`X' = X - calls inner - (scope instances below) (inner + outer)`, from the record's calibration), self time, the share of the run, the estimated scope cost per node (`!` above 10 percent), and per node the time per unit of each exact measure at scopes whose children ran in their domain, each noisy one (`time!`) in ms and as a share of the node's time, and busy over wall. `--ratio A/B` adds measure A over measure B per node (`width/sections`, a predicted time over `wall`); repeatable. The warnings the records collected follow the tree, with their count and node. Sibling scopes are matched by module and name. `--folded` writes folded stacks for a flame graph, `--json` the rows.
 
 ```
 run: wall 4.653 ms, busy 17.557 ms, scope cost 0.00% of the thread time
@@ -114,7 +114,7 @@ noisy measures, median over records (ms), B/A with its 95% bootstrap interval:
 gate: fails on (run) wall, pairs wall
 ```
 
-`ab --rounds N [--aa] -- CMD_A :: CMD_B`: runs the commands alternately, each writing its record to the path in `RSPROBE_RECORD` (`examples/workload.rs` shows the program side), then compares; `--aa` runs A a second time per round for the noise band.
+`ab --rounds N [--aa] -- CMD_A :: CMD_B`: runs the commands alternately, each writing its record to the path in `RSPROBE_RECORD` (`examples/workload.rs` shows the program side), then compares; `--aa` runs A a second time per round for the noise band. `--case NAME=ARGS`, repeated, appends ARGS to both commands per configuration and prints one table across them: the run's wall time, its verdict, the exact differences and the gate.
 
 ```
 round 10/10 a  0.005 s

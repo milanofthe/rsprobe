@@ -4,7 +4,7 @@ import json
 
 from .constants import OVERHEAD_MARK
 from .overhead import corrected, cost_share, domain, share
-from .records import name, preorder, total
+from .records import children, name, preorder, total
 
 # Values of a node that are not user measures.
 BUILTIN = ("calls", "wall", "busy", "self", "cost")
@@ -18,10 +18,11 @@ def summary(runs):
     return nodes, run
 
 
-def ratios(v, noisy):
-    """Time per unit of each exact user measure at a node (ns, in the node's
-    domain), each noisy one (a time) over that time, and busy over wall where
-    the node has both."""
+def ratios(v, noisy, own, asked=()):
+    """Time per unit of each exact user measure (ns, in the node's domain)
+    where the node has time of its own (`own`), each noisy one (a time) over
+    that time, busy over wall where the node has both, and each asked (A, B)
+    as `A/B` where B is not zero."""
     d = domain(v)
     t = v[d]
     out = {}
@@ -29,24 +30,42 @@ def ratios(v, noisy):
         if m in BUILTIN or not x:
             continue
         if m not in noisy:
-            out["ns/" + m] = t / x
+            if own:
+                out["ns/" + m] = t / x
         elif t:
             out["%s/%s" % (m, d)] = x / t
     if v["wall"] > 0 and v["busy"] > 0:
         out["busy/wall"] = v["busy"] / v["wall"]
+    for a, b in asked:
+        if v.get(b):
+            out["%s/%s" % (a, b)] = v.get(a, 0) / v[b]
     return out
 
 
-def rows(runs):
-    """One dict per node in preorder, with shares and ratios."""
+def asked_ratio(text):
+    """`A/B` as the pair (A, B) of measure names."""
+    a, _, b = text.rpartition("/")
+    if not a or not b:
+        raise ValueError("expected --ratio A/B, got %r" % text)
+    return a, b
+
+
+def rows(runs, asked=()):
+    """One dict per node in preorder, with shares, the ratios and those asked
+    for as (A, B) pairs."""
     nodes, run = summary(runs)
     noisy = set().union(*(r["noisy"] for r in runs))
+    kids = children(list(nodes))
     out = []
     for p in preorder(nodes):
         v = nodes[p]
+        # Time of its own: a scope with self time whose children ran in its
+        # domain, so that no part of it is waiting for work timed elsewhere.
+        own = v["calls"] and v["self"] > 0 and all(
+            domain(nodes[k]) == domain(v) for k in kids[p])
         row = {m: v[m] for m in BUILTIN}
         row.update(path=list(p), domain=domain(v), share=share(v, run),
-                   cost_share=cost_share(v), ratios=ratios(v, noisy),
+                   cost_share=cost_share(v), ratios=ratios(v, noisy, own, asked),
                    measures={m: x for m, x in v.items() if m not in BUILTIN})
         out.append(row)
     return out, run
@@ -74,8 +93,8 @@ def warnings(runs):
     return [k + (c,) for k, c in out.items()], dropped
 
 
-def text(runs):
-    rs, run = rows(runs)
+def text(runs, asked=()):
+    rs, run = rows(runs, asked)
     k = len(runs)
     inner = sum(r["inner"] for r in runs) / k
     outer = sum(r["outer"] for r in runs) / k
@@ -112,6 +131,8 @@ def text(runs):
         "timed only on workers (share of the run's busy).",
         "scope: estimated scope cost in the node's recorded time; ! above "
         "%d%%." % (100 * OVERHEAD_MARK),
+        "ns/X: time per unit of an exact measure at scopes whose children "
+        "ran in their domain; others with --ratio A/B.",
     ]
     ws, dropped = warnings(runs)
     if ws or dropped:
@@ -124,8 +145,8 @@ def text(runs):
     return "\n".join(out)
 
 
-def as_json(runs):
-    rs, run = rows(runs)
+def as_json(runs, asked=()):
+    rs, run = rows(runs, asked)
     ws, dropped = warnings(runs)
     ws = [{"path": list(p), "level": lv, "text": t, "count": c}
           for p, lv, t, c in ws]

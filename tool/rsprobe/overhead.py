@@ -20,9 +20,11 @@ def corrected(run):
 
     where below_X(n) counts the scope instances under n that are timed in X
     and reached through nodes timed in X: the instances inside n's X
-    intervals. In the node's domain D, `cost` = D(n) - D'(n) is the
-    estimated instrumentation and `self` = D'(n) minus D' of the children in
-    the same domain.
+    intervals. A node without time in X has no X interval: X'(n) = 0 (a scope
+    on the calling thread whose children ran on workers has no busy time).
+    The self time in X is X'(n) minus X' of the children timed in X, zero
+    without time in X. In the node's domain D, `cost` = D(n) - D'(n) is the
+    estimated instrumentation and `self` the self time in D.
 
     Returns ({path: values}, run): values are the record's with `wall` and
     `busy` corrected, plus `self` and `cost`; run holds `wall`, the run's wall
@@ -45,13 +47,16 @@ def corrected(run):
         o = dict(v)
         for x in ("wall", "busy"):
             own = v.get("calls", 0) * inner if d == x else 0
-            o[x] = v.get(x, 0) - own - below(p, x) * full
+            o[x] = v.get(x, 0) and v[x] - own - below(p, x) * full
         o["cost"] = v.get(d, 0) - o[d]
         out[p] = o
+
+    def own(p, x):
+        return nodes[p].get(x, 0) and out[p][x] - sum(
+            out[k][x] for k in kids[p] if domain(nodes[k]) == x)
+
     for p, o in out.items():
-        d = domain(nodes[p])
-        o["self"] = o[d] - sum(out[k][d] for k in kids[p]
-                               if domain(nodes[k]) == d)
+        o["self"] = own(p, domain(nodes[p]))
 
     def totals(t):
         top = [v for p, v in t.items() if len(p) == 1]
