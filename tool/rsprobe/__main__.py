@@ -12,12 +12,17 @@ def parser():
                                  description="Reads rsprobe run records.")
     sub = ap.add_subparsers(dest="command", required=True)
     r = sub.add_parser("report", help="the tree with corrected times; "
-                       "several records are summed")
+                       "over several records the medians")
     r.add_argument("records", nargs="+", help="record files or directories")
     form = r.add_mutually_exclusive_group()
     form.add_argument("--folded", action="store_true",
                       help="folded stacks of self time (flame graph input)")
     form.add_argument("--json", action="store_true")
+    form.add_argument("--threads", nargs="?", const="", metavar="NODE",
+                      help="each thread's values, at NODE (a/b) or at every "
+                      "node; records taken with Context::record_threads()")
+    r.add_argument("--sum", action="store_true",
+                   help="the sums over the records instead of the medians")
     r.add_argument("--ratio", action="append", default=[],
                    type=report.asked_ratio, metavar="A/B",
                    help="measure A over measure B per node, e.g. "
@@ -56,9 +61,11 @@ def main(argv=None):
             runs = load_set(args.records)
             if args.folded:
                 print(report.folded(runs))
+            elif args.threads is not None:
+                print(report.threads(runs, args.threads or None))
             else:
                 form = report.as_json if args.json else report.text
-                print(form(runs, args.ratio))
+                print(form(runs, args.ratio, args.sum))
             return 0
         if args.command == "scale":
             form = scale.text_threads if args.threads else scale.text
