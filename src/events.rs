@@ -80,9 +80,6 @@ pub(crate) fn emit(
     (level, module, file, line): (Level, &'static str, &'static str, u32),
     kind: impl FnOnce() -> Kind,
 ) {
-    if level.0 > MAX.load(Relaxed) {
-        return;
-    }
     let Some((shared, node)) = here(site, level, module) else {
         return;
     };
@@ -122,6 +119,9 @@ impl Site {
     /// expand to.
     #[inline]
     pub fn event(&'static self, kind: impl FnOnce() -> Kind) {
+        if self.level.0 > MAX.load(Relaxed) {
+            return;
+        }
         emit(
             Some(self),
             (self.level, self.module, self.file, self.line),

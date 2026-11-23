@@ -23,7 +23,7 @@ impl log::Log for Logger {
     }
 
     fn log(&self, r: &log::Record) {
-        if FORWARDING.get() {
+        if FORWARDING.get() || !self.enabled(r.metadata()) {
             return;
         }
         let site = (
