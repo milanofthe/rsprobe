@@ -236,12 +236,12 @@ def threads(runs, node=None):
                         "%s %.3f ms" % (m, x / 1e6) if m in r["noisy"] else
                         "%s=%d" % (m, x) for m, x in v.items()
                         if m not in BUILTIN and x]
-                out.append("%-28s %6d %-7s %8d %10.3f %10.3f %9s  %s" % (
+                out.append(("%-28s %6d %-7s %8d %10.3f %10.3f %9s  %s" % (
                     label, t["index"], "handle" if t["handle"] else "context",
                     v.get("calls", 0), v.get("wall", 0) / 1e6,
                     v.get("busy", 0) / 1e6,
                     "%.3f" % (v["busy"] / mean) if v.get("busy") else "",
-                    ", ".join(user)).rstrip())
+                    ", ".join(user))).rstrip())
                 label = ""
         out.append("")
     return "\n".join(out[:-1])
