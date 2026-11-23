@@ -1,0 +1,16 @@
+name: ci
+# One Linux job: fmt, clippy, the tests with and without the feature, and the
+# wasm32 build checked for imports (scripts/ci.sh).
+on:
+  pull_request:
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: sh scripts/ci.sh
