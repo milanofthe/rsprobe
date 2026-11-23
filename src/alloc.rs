@@ -6,7 +6,10 @@ use std::cell::Cell;
 /// A global allocator that adds to this thread's counters and forwards:
 /// `bytes` and `allocs` on an allocation, `freed` on a free. A reallocation
 /// counts as an allocation of the new size and a free of the old one; a failed
-/// call counts nothing.
+/// call counts nothing. The counters are const-initialised thread-local cells
+/// without a destructor, so the wrapper neither allocates nor locks and counts
+/// during thread start and teardown too. Without the feature `alloc` it only
+/// forwards.
 ///
 /// `peak` of a scope: the largest value of this thread's live bytes (`bytes`
 /// minus `freed`) after an allocation inside the scope, minus their value at
@@ -14,10 +17,10 @@ use std::cell::Cell;
 /// includes those of the scopes inside it, which are relative to their own
 /// entry. A node keeps the maximum over its calls and threads: the peaks of
 /// threads running at once are not added. Memory freed on another thread
-/// lowers the live bytes of that one. The counters are const-initialised thread-local cells
-/// without a destructor, so the wrapper neither allocates nor locks and counts
-/// during thread start and teardown too. Without the feature `alloc` it only
-/// forwards. Installed by the final binary:
+/// lowers the live bytes of that one. The wrapper keeps the high-water mark
+/// with a compare and a conditional store per allocation.
+///
+/// Installed by the final binary:
 ///
 /// ```
 /// #[global_allocator]
@@ -75,17 +78,32 @@ fn count(add: [u64; 3]) {
     }
 }
 
+/// `f` of this thread's counters; zeros without the feature `alloc`.
+#[inline]
+fn on_counts(f: impl FnOnce(&[Cell<u64>; N]) -> [u64; N]) -> [u64; N] {
+    match cfg!(feature = "alloc") {
+        true => COUNTS.try_with(f).unwrap_or([0; N]),
+        false => [0; N],
+    }
+}
+
+/// This thread's counters; zeros where no [`Alloc`] is installed.
+#[inline]
+pub(crate) fn counts() -> [u64; N] {
+    on_counts(|c| c.each_ref().map(Cell::get))
+}
+
 /// This thread's counters at a guard's entry, with the high-water mark
 /// before it; the mark restarts at the live bytes.
 #[inline]
 pub(crate) fn open() -> [u64; N] {
-    let at = counts();
-    let _ = COUNTS.try_with(|c| {
+    on_counts(|c| {
+        let at = c.each_ref().map(Cell::get);
         if let [b, _, f, high] = c.as_slice() {
             high.set(b.get().wrapping_sub(f.get()));
         }
-    });
-    at
+        at
+    })
 }
 
 /// The differences of `bytes`, `allocs` and `freed` since [`open`] returned
@@ -93,29 +111,19 @@ pub(crate) fn open() -> [u64; N] {
 /// one inside it.
 #[inline]
 pub(crate) fn close(at: &[u64; N]) -> [u64; N] {
-    let mut d = counts();
-    if let ([b, a, f, high], [b0, a0, f0, high0]) = (&mut d[..], &at[..]) {
-        let mark = (*high as i64).max(*high0 as i64) as u64;
-        let _ = COUNTS.try_with(|c| c.as_slice().last().map(|h| h.set(mark)));
-        *high = high.wrapping_sub(b0.wrapping_sub(*f0));
-        (*b, *a, *f) = (
-            b.wrapping_sub(*b0),
-            a.wrapping_sub(*a0),
-            f.wrapping_sub(*f0),
-        );
-    }
-    d
-}
-
-/// This thread's `bytes`, `allocs` and `freed`; zeros where no [`Alloc`] is
-/// installed.
-#[inline]
-pub(crate) fn counts() -> [u64; N] {
-    if !cfg!(feature = "alloc") {
-        return [0; N];
-    }
-    let counts = COUNTS.try_with(|c| c.each_ref().map(Cell::get));
-    counts.unwrap_or([0; N])
+    on_counts(|c| {
+        let mut d = c.each_ref().map(Cell::get);
+        if let ([b, a, f, high], [b0, a0, f0, high0], [.., mark]) =
+            (&mut d[..], &at[..], c.as_slice())
+        {
+            mark.set((*high as i64).max(*high0 as i64) as u64);
+            *high = high.wrapping_sub(b0.wrapping_sub(*f0));
+            *b = b.wrapping_sub(*b0);
+            *a = a.wrapping_sub(*a0);
+            *f = f.wrapping_sub(*f0);
+        }
+        d
+    })
 }
 
 /// Runs `f` and resets this thread's counters to their values before it: the
