@@ -75,19 +75,22 @@ mod alloc;
 mod bridge;
 mod context;
 mod events;
+mod guard;
 mod record;
 mod sinks;
+mod site;
 mod stream;
+mod thread;
 
 pub use alloc::Alloc;
 #[cfg(feature = "log")]
 pub use bridge::{LogSink, Logger};
-pub use context::{current, now, Builder, Clock, Context, Guard, Handle};
+pub use context::{now, Builder, Clock, Context};
 pub use events::{Event, Kind};
+pub use guard::{current, Guard, Handle};
 pub use record::{Calibration, Node, Param, Record};
 pub use sinks::{Buffer, Path, Sink, Stderr};
-
-use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+pub use site::{Level, Site};
 
 /// Version of the record's JSON layout.
 const SCHEMA: u32 = 1;
@@ -98,82 +101,41 @@ const SCHEMA: u32 = 1;
 /// 0.2 ms. The constants are means over the pass: on Apple Silicon the clock
 /// ticks every 42 ns, about the cost of a scope, and a minimum over short
 /// rounds was measured to return an inner constant of 0.
-#[cfg(feature = "on")]
 const CALIBRATION_SCOPES: u32 = 4096;
 
 /// Distinct events at WARN and above a context keeps for its record; further
 /// ones are counted as dropped.
 const WARNINGS: usize = 100;
 
-/// Importance of a call site. A site is active when its level is at most the
-/// threshold of the current context.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct Level(u8);
-
-impl Level {
-    /// Errors.
-    pub const ERROR: Level = Level(1);
-    /// Warnings.
-    pub const WARN: Level = Level(2);
-    /// Phases of a run; the default level of a site and threshold of a context.
-    pub const INFO: Level = Level(3);
-    /// Finer scopes, per section.
-    pub const DEBUG: Level = Level(4);
-    /// Finest scopes, per iteration.
-    pub const TRACE: Level = Level(5);
-
-    /// Lower-case name, as written in the record.
-    pub fn name(self) -> &'static str {
-        ["off", "error", "warn", "info", "debug", "trace"][self.0 as usize]
-    }
+/// The static call site of one macro expansion, as `&'static Site`.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! site {
+    ($level:ident, $name:expr) => {{
+        static SITE: $crate::Site = $crate::Site::new(
+            $name,
+            module_path!(),
+            file!(),
+            line!(),
+            $crate::Level::$level,
+        );
+        &SITE
+    }};
 }
 
-/// A call site: one static per macro expansion, given a dense id on first use.
-/// The id indexes the sites of the record and the per-thread decision whether
-/// the site is active.
-#[derive(Debug)]
-pub struct Site {
-    /// Scope or measure name; empty for an event site.
-    pub name: &'static str,
-    /// `module_path!()` of the expansion.
-    pub module: &'static str,
-    /// `file!()` of the expansion.
-    pub file: &'static str,
-    /// `line!()` of the expansion.
-    pub line: u32,
-    /// Level against the context's threshold.
-    pub level: Level,
-    /// Id plus one; zero until registered.
-    id: AtomicU32,
+/// The first group with the feature `on`, the second without.
+#[doc(hidden)]
+#[cfg(feature = "on")]
+#[macro_export]
+macro_rules! on_or {
+    ({ $($on:tt)* } { $($off:tt)* }) => { $($on)* };
 }
 
-impl Site {
-    /// A site that is not yet registered.
-    pub const fn new(
-        name: &'static str,
-        module: &'static str,
-        file: &'static str,
-        line: u32,
-        level: Level,
-    ) -> Site {
-        Site {
-            name,
-            module,
-            file,
-            line,
-            level,
-            id: AtomicU32::new(0),
-        }
-    }
-
-    /// The id, registered on first use.
-    #[inline]
-    fn id(&'static self) -> u32 {
-        match self.id.load(Relaxed) {
-            0 => alloc::quiet(|| context::register(self)),
-            id => id - 1,
-        }
-    }
+#[doc(hidden)]
+#[cfg(not(feature = "on"))]
+#[macro_export]
+macro_rules! on_or {
+    ({ $($on:tt)* } { $($off:tt)* }) => { $($off)* };
 }
 
 /// Enters a scope at the current node and returns its guard:
@@ -185,16 +147,9 @@ macro_rules! scope {
     ($name:expr) => {
         $crate::scope!(INFO, $name)
     };
-    ($level:ident, $name:expr) => {{
-        static SITE: $crate::Site = $crate::Site::new(
-            $name,
-            module_path!(),
-            file!(),
-            line!(),
-            $crate::Level::$level,
-        );
-        SITE.scope()
-    }};
+    ($level:ident, $name:expr) => {
+        $crate::site!($level, $name).scope()
+    };
 }
 
 /// Enters a scope at the current node and returns its guard:
@@ -210,38 +165,18 @@ macro_rules! scope {
 /// Adds a value to an exact measure at the current node:
 /// `add!("iterations", n)` at level INFO, `add!(DEBUG, "iterations", n)` at a
 /// given level. The value is converted with `as u64` and evaluated only when
-/// the site is active.
-#[cfg(feature = "on")]
+/// the site is active. Without the feature `on`: the value is type-checked in
+/// a branch never taken.
 #[macro_export]
 macro_rules! add {
     ($name:expr, $value:expr) => {
         $crate::add!(INFO, $name, $value)
     };
-    ($level:ident, $name:expr, $value:expr) => {{
-        static SITE: $crate::Site = $crate::Site::new(
-            $name,
-            module_path!(),
-            file!(),
-            line!(),
-            $crate::Level::$level,
-        );
-        SITE.add(|| $value as u64)
-    }};
-}
-
-/// Adds a value to an exact measure at the current node:
-/// `add!("iterations", n)` or `add!(DEBUG, "iterations", n)`. Without the
-/// feature `on`: the value is type-checked in a branch never taken.
-#[cfg(not(feature = "on"))]
-#[macro_export]
-macro_rules! add {
-    ($name:expr, $value:expr) => {
-        if false {
-            let _ = $value;
-        }
-    };
     ($level:ident, $name:expr, $value:expr) => {
-        $crate::add!($name, $value)
+        $crate::on_or!(
+            { $crate::site!($level, $name).add(|| $value as u64) }
+            { if false { let _ = $value; } }
+        )
     };
 }
 
@@ -278,58 +213,30 @@ macro_rules! trace {
 }
 
 #[doc(hidden)]
-#[cfg(feature = "on")]
-#[macro_export]
-macro_rules! message {
-    ($level:ident, $($a:tt)+) => {{
-        static SITE: $crate::Site =
-            $crate::Site::new("", module_path!(), file!(), line!(), $crate::Level::$level);
-        SITE.event(|| $crate::Kind::Message(::std::format!($($a)+)))
-    }};
-}
-
-#[doc(hidden)]
-#[cfg(not(feature = "on"))]
 #[macro_export]
 macro_rules! message {
     ($level:ident, $($a:tt)+) => {
-        if false {
-            let _ = ::std::format_args!($($a)+);
-        }
+        $crate::on_or!(
+            { $crate::site!($level, "").event(|| $crate::Kind::Message(::std::format!($($a)+))) }
+            { if false { let _ = ::std::format_args!($($a)+); } }
+        )
     };
 }
 
 /// Emits a progress event at the current node: `progress!(done, total)` at
 /// level INFO, `progress!(DEBUG, done, total)` at a given level. The values
 /// are converted with `as u64` and evaluated only when the site is active.
-#[cfg(feature = "on")]
+/// Without the feature `on`: the values are type-checked in a branch never
+/// taken.
 #[macro_export]
 macro_rules! progress {
     ($done:expr, $total:expr) => {
         $crate::progress!(INFO, $done, $total)
     };
-    ($level:ident, $done:expr, $total:expr) => {{
-        static SITE: $crate::Site =
-            $crate::Site::new("", module_path!(), file!(), line!(), $crate::Level::$level);
-        SITE.event(|| $crate::Kind::Progress {
-            done: $done as u64,
-            total: $total as u64,
-        })
-    }};
-}
-
-/// Emits a progress event at the current node: `progress!(done, total)` or
-/// `progress!(DEBUG, done, total)`. Without the feature `on`: the values are
-/// type-checked in a branch never taken.
-#[cfg(not(feature = "on"))]
-#[macro_export]
-macro_rules! progress {
-    ($done:expr, $total:expr) => {
-        if false {
-            let _ = ($done, $total);
-        }
-    };
     ($level:ident, $done:expr, $total:expr) => {
-        $crate::progress!($done, $total)
+        $crate::on_or!(
+            { $crate::site!($level, "").event(|| $crate::Kind::Progress { done: $done as u64, total: $total as u64 }) }
+            { if false { let _ = ($done, $total); } }
+        )
     };
 }

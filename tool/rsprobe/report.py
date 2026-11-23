@@ -4,7 +4,7 @@ import json
 
 from .constants import OVERHEAD_MARK
 from .overhead import corrected, cost_share, domain, share
-from .records import preorder, total
+from .records import name, preorder, total
 
 # Values of a node that are not user measures.
 BUILTIN = ("calls", "wall", "busy", "self", "cost")
@@ -53,6 +53,17 @@ def params(runs):
     return out
 
 
+def warnings(runs):
+    """The records' warnings summed per node, level and text, in order of
+    first appearance: ([(path, level, text, count)], dropped)."""
+    out = {}
+    for r in runs:
+        for path, level, t, count in r["warnings"]:
+            out[path, level, t] = out.get((path, level, t), 0) + count
+    dropped = sum(r["warnings_dropped"] for r in runs)
+    return [k + (c,) for k, c in out.items()], dropped
+
+
 def text(runs):
     rs, run = rows(runs)
     k = len(runs)
@@ -90,13 +101,25 @@ def text(runs):
         "scope: estimated scope cost in the node's recorded time; ! above "
         "%d%%." % (100 * OVERHEAD_MARK),
     ]
+    ws, dropped = warnings(runs)
+    if ws or dropped:
+        out += ["", "warnings%s:" % (", summed" * (k > 1)),
+                "%8s  %-28s %-6s %s" % ("count", "node", "level", "text")]
+        out += ["%8d  %-28s %-6s %s" % (c, name(p), lv, t)
+                for p, lv, t, c in ws]
+        if dropped:
+            out.append("%8d  not kept, beyond the record's bound" % dropped)
     return "\n".join(out)
 
 
 def as_json(runs):
     rs, run = rows(runs)
+    ws, dropped = warnings(runs)
+    ws = [{"path": list(p), "level": lv, "text": t, "count": c}
+          for p, lv, t, c in ws]
     return json.dumps({"records": len(runs), "params": params(runs),
-                       "run": run, "nodes": rs}, indent=1)
+                       "run": run, "nodes": rs, "warnings": ws,
+                       "warnings_dropped": dropped}, indent=1)
 
 
 def folded(runs):

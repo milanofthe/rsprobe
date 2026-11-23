@@ -3,7 +3,7 @@
 
 use crate::record::Str;
 use crate::Event;
-use std::fmt::{self, Display, Formatter, Write};
+use std::fmt::{self, Display, Formatter};
 
 /// One entry of a thread's stream buffer.
 pub(crate) enum Item {
@@ -37,72 +37,55 @@ impl Display for Us {
 
 impl Stream {
     /// The Chrome trace event JSON: one "M" event per thread, "X" per span,
-    /// "i" per event, "C" per `add!` (one series per node and thread). `node`
-    /// names a node, `site` an `add!` site.
+    /// "i" per event, "C" per `add!` (one series per node and thread). `name`
+    /// names a node, `measure` an `add!` site.
     pub(crate) fn write(
         &self,
-        node: impl Fn(u32) -> &'static str,
-        site: impl Fn(u32) -> &'static str,
+        name: impl Fn(u32) -> &'static str,
+        measure: impl Fn(u32) -> &'static str,
     ) -> String {
-        let mut threads: Vec<u32> = self
-            .items
-            .iter()
-            .map(|i| i.0)
-            .chain(self.events.iter().map(|e| e.0))
-            .collect();
+        let mut threads: Vec<u32> = self.items.iter().map(|i| i.0).collect();
+        threads.extend(self.events.iter().map(|e| e.0));
         threads.sort_unstable();
         threads.dedup();
-        let mut s = String::from("{\"displayTimeUnit\":\"ns\",\"traceEvents\":[");
-        let mut sep = "";
-        let mut ev = |s: &mut String, tid: u32, body: fmt::Arguments| {
-            let _ = write!(s, "{sep}{{\"pid\":1,\"tid\":{tid},{body}}}");
-            sep = ",";
-        };
-        for &t in &threads {
-            ev(
-                &mut s,
+        let ev = |tid: u32, body: fmt::Arguments| format!("{{\"pid\":1,\"tid\":{tid},{body}}}");
+        let mut out: Vec<String> = threads
+            .into_iter()
+            .map(|t| {
+                let args = format!("{{\"name\":\"thread {t}\"}}");
+                ev(
+                    t,
+                    format_args!("\"ph\":\"M\",\"name\":\"thread_name\",\"args\":{args}"),
+                )
+            })
+            .collect();
+        out.extend(self.items.iter().map(|&(t, ref i)| match *i {
+            Item::Span { node, start, dur } => ev(
                 t,
                 format_args!(
-                    "\"ph\":\"M\",\"name\":\"thread_name\",\"args\":{{\"name\":\"thread {t}\"}}"
+                    "\"ph\":\"X\",\"name\":{},\"ts\":{},\"dur\":{},\"args\":{{\"node\":{node}}}",
+                    Str(name(node)),
+                    Us(start),
+                    Us(dur)
                 ),
-            );
-        }
-        for (t, i) in &self.items {
-            match *i {
-                Item::Span {
-                    node: n,
-                    start,
-                    dur,
-                } => ev(
-                    &mut s,
-                    *t,
-                    format_args!(
-                        "\"ph\":\"X\",\"name\":{},\"ts\":{},\"dur\":{},\"args\":{{\"node\":{n}}}",
-                        Str(node(n)),
-                        Us(start),
-                        Us(dur)
-                    ),
+            ),
+            Item::Count {
+                site,
+                node,
+                time,
+                value,
+            } => ev(
+                t,
+                format_args!(
+                    "\"ph\":\"C\",\"name\":{},\"ts\":{},\"args\":{{{}:{value}}}",
+                    Str(measure(site)),
+                    Us(time),
+                    Str(&format!("{} {t}", name(node)))
                 ),
-                Item::Count {
-                    site: m,
-                    node: n,
-                    time,
-                    value,
-                } => ev(
-                    &mut s,
-                    *t,
-                    format_args!(
-                        "\"ph\":\"C\",\"name\":{},\"ts\":{},\"args\":{{{}:{value}}}",
-                        Str(site(m)),
-                        Us(time),
-                        Str(&format!("{} {t}", node(n)))
-                    ),
-                ),
-            }
-        }
-        for (t, e) in &self.events {
+            ),
+        }));
+        out.extend(self.events.iter().map(|(t, e)| {
             ev(
-                &mut s,
                 *t,
                 format_args!(
                     "\"ph\":\"i\",\"s\":\"t\",\"name\":{},\"ts\":{},\"args\":{{\"node\":{},\"level\":\"{}\"}}",
@@ -111,9 +94,9 @@ impl Stream {
                     e.node,
                     e.level.name()
                 ),
-            );
-        }
-        s.push_str("]}");
-        s
+            )
+        }));
+        let events = out.join(",");
+        format!("{{\"displayTimeUnit\":\"ns\",\"traceEvents\":[{events}]}}")
     }
 }

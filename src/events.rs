@@ -1,10 +1,12 @@
 //! Events: messages and progress at the current node.
 
-use crate::context::{here, lock, Shared, MAX};
+use crate::alloc::quiet;
+use crate::context::Shared;
 use crate::sinks::Path;
+use crate::site::lock;
 use crate::{Level, Site};
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::Arc;
 
 /// What an event carries.
 #[derive(Clone, Debug, PartialEq)]
@@ -71,49 +73,42 @@ impl Warnings {
     }
 }
 
-/// Emits an event at the current node if `site` (or, for `None`, a site of
-/// `level` in `module`) is active in the current context. `kind` is called
-/// only then, outside the thread-local state. Its allocations, and
-/// those of the sinks, are not counted by [`Alloc`](crate::Alloc).
+/// Emits the event `kind()` at `node` of `shared` from the thread of index
+/// `thread`; `kind` is called outside the thread-local state. The event is
+/// kept among the warnings if its level is WARN or above, in the stream if
+/// there is one, and passed to every sink. Its allocations, and those of the
+/// sinks, are not counted by [`Alloc`](crate::Alloc).
 pub(crate) fn emit(
-    site: Option<&'static Site>,
+    (shared, node, thread): (Arc<Shared>, u32, u32),
     (level, module, file, line): (Level, &'static str, &'static str, u32),
     kind: impl FnOnce() -> Kind,
 ) {
-    let Some((shared, node, thread)) = here(site, level, module) else {
-        return;
-    };
-    crate::alloc::quiet(|| {
+    quiet(|| {
         let kind = kind();
+        let time = (shared.cfg.clock)();
         let e = Event {
             node,
             level,
             module,
             file,
             line,
-            time: (shared.clock)(),
+            time,
             kind,
         };
-        send(&shared, thread, &e);
+        if let Some(s) = &shared.stream {
+            lock(s).events.push((thread, e.clone()));
+        }
+        if e.level <= Level::WARN && matches!(e.kind, Kind::Message(_)) {
+            lock(&shared.warnings).add(&e);
+        }
+        let path = Path {
+            shared: &shared,
+            node,
+        };
+        for s in &shared.cfg.sinks {
+            s.event(&e, &path);
+        }
     })
-}
-
-/// Keeps `e` among the warnings if its level is WARN or above, in the stream
-/// if there is one, and passes it to every sink.
-fn send(shared: &Shared, thread: u32, e: &Event) {
-    if let Some(s) = &shared.stream {
-        lock(s).events.push((thread, e.clone()));
-    }
-    if e.level <= Level::WARN && matches!(e.kind, Kind::Message(_)) {
-        lock(&shared.warnings).add(e);
-    }
-    let path = Path {
-        shared,
-        node: e.node,
-    };
-    for s in &shared.sinks {
-        s.event(e, &path);
-    }
 }
 
 impl Site {
@@ -122,13 +117,9 @@ impl Site {
     /// expand to.
     #[inline]
     pub fn event(&'static self, kind: impl FnOnce() -> Kind) {
-        if self.level.0 > MAX.load(Relaxed) {
-            return;
+        let here = self.active(|cur, e, _| (e.shared().clone(), cur.node, e.thread));
+        if let Some(here) = here {
+            emit(here, (self.level, self.module, self.file, self.line), kind)
         }
-        emit(
-            Some(self),
-            (self.level, self.module, self.file, self.line),
-            kind,
-        )
     }
 }

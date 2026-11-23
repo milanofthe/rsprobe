@@ -2,6 +2,7 @@
 
 use crate::events::emit;
 use crate::sinks::Line;
+use crate::thread::with_current;
 use crate::{Event, Kind, Level, Path, Sink};
 use std::cell::Cell;
 
@@ -19,20 +20,25 @@ pub struct Logger;
 
 impl log::Log for Logger {
     fn enabled(&self, m: &log::Metadata) -> bool {
-        m.level() as u8 <= crate::context::MAX.load(std::sync::atomic::Ordering::Relaxed)
+        m.level() as u8 <= crate::site::MAX.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn log(&self, r: &log::Record) {
         if FORWARDING.get() || !self.enabled(r.metadata()) {
             return;
         }
+        let (level, module) = (Level(r.level() as u8), r.module_path_static().unwrap_or(""));
+        let here = with_current(|cur, e| (e.shared().clone(), cur.node, e.thread));
+        let Some(here) = here.filter(|h| level <= h.0.level(module)) else {
+            return;
+        };
         let site = (
-            Level(r.level() as u8),
-            r.module_path_static().unwrap_or(""),
+            level,
+            module,
             r.file_static().unwrap_or(""),
             r.line().unwrap_or(0),
         );
-        emit(None, site, || Kind::Message(r.args().to_string()));
+        emit(here, site, || Kind::Message(r.args().to_string()));
     }
 
     fn flush(&self) {}
