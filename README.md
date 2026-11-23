@@ -45,6 +45,44 @@ pool.run(|| {
 });
 ```
 
+## Tool
+
+`tool/` reads records: a Python package, standard library only, Python 3.9+. Run it as `python -m rsprobe <command>` from `tool/`, or install it with `pip install ./tool`. A set of records is a record file or a directory of them; several records of a report are summed.
+
+`report RECORD...`: the tree with the scope cost subtracted (`X' = X - calls inner - (scope instances below) (inner + outer)`, from the record's calibration), self time, the share of the run, the estimated scope cost per node (`!` above 10 percent), and per node the time per unit of each measure and busy over wall. `--folded` writes folded stacks for a flame graph, `--json` the rows.
+
+```
+run: wall 4.653 ms, busy 17.557 ms, scope cost 0.00% of the thread time
+node                            calls    wall ms    busy ms    self ms   share  scope  measures
+(run)                               0      4.653      0.000      0.004  100.0%   0.0%
+  assemble                          1      0.005      0.000      0.005    0.1%   0.5%  nonzeros=4000, ns/nonzeros 1.212
+  solve                             1      0.018      0.000      0.000    0.4%   1.6%
+    iteration                       5      0.018      0.000      0.018    0.4%   0.7%  iterations=5, ns/iterations 3615
+  pairs                             1      4.569     17.557      4.569   98.2%   0.0%  busy/wall 3.843
+    task                            4      0.000     17.552     17.552  100.0%   0.0%  differences=16000000, ns/differences 1.097
+```
+
+`compare A B [--aa A2]`: exact measures first, every difference between the sets and within a set; then per node the ratio of the median times with a 95 percent bootstrap interval, against a noise band from the A/A sets when given. Exit code 1 when a node of at least 5 percent of the run is slower beyond the band.
+
+```
+exact measures, A -> B:
+  pairs/task                       calls        4 -> 2
+noisy measures, median over records (ms), B/A with its 95% bootstrap interval:
+  node                                            A          B     B/A          interval  share  verdict
+  sort                             wall       0.042      0.045   1.066    [0.855, 1.252]   1.4%  within noise
+  pairs                            wall       3.026      5.501   1.818    [1.678, 2.069]  98.0%  slower
+gate: fails on (run) wall, pairs wall
+```
+
+`ab --rounds N [--aa] -- CMD_A :: CMD_B`: runs the commands alternately, each writing its record to the path in `RSPROBE_RECORD` (`examples/workload.rs` shows the program side), then compares; `--aa` runs A a second time per round for the noise band.
+
+```
+round 10/10 a  0.005 s
+round 10/10 b  0.008 s
+round 10/10 aa 0.005 s
+records in /tmp/rsprobe-ab-x1y2
+```
+
 ## License
 
 MIT

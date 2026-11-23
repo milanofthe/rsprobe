@@ -15,4 +15,6 @@ for f in "" on; do
     run cargo build --release --example wasm_probe --target wasm32-unknown-unknown --features "$f"
     run python3 scripts/wasm_imports.py target/wasm32-unknown-unknown/release/examples/wasm_probe.wasm
 done
+# The tool, standard library only; its round trip builds examples/workload.rs.
+run python3 -m unittest discover -s tool/tests -t tool
 echo "== green"
