@@ -1,6 +1,6 @@
 //! The run record and its JSON form.
 
-use crate::Site;
+use crate::{Event, Site};
 use std::fmt::{self, Display, Formatter, Write};
 
 /// The cost of an empty scope, timed when the context was created (zero
@@ -85,6 +85,11 @@ pub struct Record {
     pub sites: Vec<(u32, &'static Site)>,
     /// Nodes by id; node 0 is the root.
     pub nodes: Vec<Node>,
+    /// Distinct message events at WARN and above (same site and text once),
+    /// each with its count, in the order first emitted.
+    pub warnings: Vec<(Event, u64)>,
+    /// Warnings not kept or counted because the bound was reached.
+    pub warnings_dropped: u64,
 }
 
 impl Record {
@@ -192,6 +197,21 @@ impl Display for Record {
             }
             f.write_str("}}")?;
         }
-        f.write_str("]}")
+        f.write_str("],\"warnings\":[")?;
+        for (i, (e, count)) in self.warnings.iter().enumerate() {
+            write!(
+                f,
+                "{}{{\"node\":{},\"level\":\"{}\",\"module\":{},\"file\":{},\"line\":{},\"time\":{},\"text\":{},\"count\":{count}}}",
+                if i > 0 { "," } else { "" },
+                e.node,
+                e.level.name(),
+                Str(e.module),
+                Str(e.file),
+                e.line,
+                e.time,
+                Str(&e.kind.to_string()),
+            )?;
+        }
+        write!(f, "],\"warnings_dropped\":{}}}", self.warnings_dropped)
     }
 }

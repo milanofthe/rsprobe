@@ -21,7 +21,7 @@ What it holds to:
 
 ## Use
 
-Libraries depend on `rsprobe` without features; the binary, test harness or binding that wants a record turns on the feature `on`. Without it `scope!` and `add!` expand to nothing.
+Libraries depend on `rsprobe` without features; the binary, test harness or binding that wants a record turns on the feature `on`. Without it every macro expands to nothing.
 
 ```rust
 let ctx = rsprobe::Context::new();
@@ -51,6 +51,30 @@ pool.run(|| {
     let _s = rsprobe::scope!("task");
 });
 ```
+
+Messages are events at the current node, at the level of their macro; the text is formatted only when the site is active. A context is built with a threshold, filters per module and its sinks; scopes and messages of a module switch together. Events at WARN and above go into the record once per site and text, with a count.
+
+```rust
+let ctx = rsprobe::Context::builder()
+    .threshold(rsprobe::Level::INFO)
+    .filter("mylib::numeric", rsprobe::Level::DEBUG)
+    .sink(rsprobe::Stderr::default())
+    .build();
+let _on = ctx.enter();
+rsprobe::debug!("pivot growth {:.2e}", g); // "debug factor: pivot growth 1.00e3"
+rsprobe::progress!(step, steps);           // one line, rewritten on a terminal
+```
+
+A host that must not be called from worker threads (a Python interpreter, a wasm host) attaches a `Buffer` and drains it on its own thread:
+
+```rust
+let buffer = rsprobe::Buffer::default();
+let ctx = rsprobe::Context::builder().sink(buffer.clone()).build();
+// ... the solve, on any threads ...
+buffer.drain(|event, path| host_log(event.level.name(), path, &event.kind.to_string()));
+```
+
+With the feature `log`, `rsprobe::Logger` turns records of the `log` facade into events at the current node, and the sink `rsprobe::LogSink` passes events on to `log`.
 
 ## Tool
 

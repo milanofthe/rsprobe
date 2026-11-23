@@ -1,12 +1,12 @@
-//! Nanoseconds per scope, per `add!` and per allocation and free with and
-//! without the counting allocator, the median of rounds, next to the
+//! Nanoseconds per scope, per `add!`, per message and per allocation and free
+//! with and without the counting allocator, the median of rounds, next to the
 //! calibration constants of a context.
 //!
 //!     cargo run --release --example bench                 # feature off
 //!     cargo run --release --example bench --features on
 //!     cargo run --release --example bench --features alloc
 
-use rsprobe::{add, scope, Alloc, Context, Level};
+use rsprobe::{add, debug, info, scope, Alloc, Context, Level};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::time::Instant;
@@ -76,7 +76,7 @@ fn main() {
         return;
     }
     row("scope, no context", time(1, flat));
-    let ctx = Context::with(Level::INFO, rsprobe::now);
+    let ctx = Context::new();
     let _on = ctx.enter();
     row(
         "scope, below the threshold",
@@ -85,7 +85,7 @@ fn main() {
         }),
     );
     {
-        let _other = Context::with(Level::TRACE, rsprobe::now);
+        let _other = Context::builder().threshold(Level::TRACE).build();
         row(
             "scope, below this context, other at TRACE",
             time(1, |_| {
@@ -96,6 +96,8 @@ fn main() {
     row("scope, on, flat", time(1, flat));
     row("scope, on, nested 4 deep", time(4, nested));
     row("add!, on", time(1, |i| add!("n", i)));
+    row("message, below the threshold", time(1, |i| debug!("{i}")));
+    row("message, on, no sink", time(1, |i| info!("{i}")));
     let c = ctx.record().calibration;
     row("calibration inner", c.inner_ns);
     row("calibration outer", c.outer_ns);

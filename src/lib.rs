@@ -18,8 +18,15 @@
 //! # assert!(json.starts_with('{'));
 //! ```
 //!
-//! Without the feature `on`, [`scope!`] and [`add!`] expand to `()` and their
-//! arguments are not evaluated.
+//! Without the feature `on`, every macro expands to `()` and its arguments are
+//! not evaluated.
+//!
+//! # Events
+//!
+//! [`error!`], [`warn!`], [`info!`], [`debug!`], [`trace!`] and [`progress!`]
+//! emit an [`Event`] at the current node; the text is formatted only when the
+//! site is active. The context passes each event to its [`Sink`]s and keeps
+//! the distinct events at WARN and above for the record.
 //!
 //! # Threads
 //!
@@ -43,15 +50,18 @@
 //!
 //! 1. One relaxed load of a global atomic, the highest threshold of all live
 //!    contexts. A site above it returns here; nothing else is touched.
-//! 2. The thread-local state: no current context, or the site's level above
-//!    the current context's threshold, returns here.
+//! 2. The thread-local state: no current context returns here.
 //! 3. The site id: one relaxed load of the site's static, registered under a
 //!    lock on the first use in the process.
-//! 4. The child of the current node for this site (for `add!`, the measure
+//! 4. One byte of this thread's entry, indexed by the site id: whether the
+//!    site is active in the current context (its level against the threshold
+//!    or the filter of its module), decided on the first use on this thread.
+//!    An inactive site returns here.
+//! 5. The child of the current node for this site (for `add!`, the measure
 //!    cell of the current node): a linear scan of this thread's cache. The
 //!    first time on a thread the node is interned under the context's lock
 //!    and this thread's cells are allocated; after that nothing is allocated.
-//! 5. A scope reads the clock on entry; on drop it reads the clock again, adds
+//! 6. A scope reads the clock on entry; on drop it reads the clock again, adds
 //!    one call and the elapsed time to this thread's cells and moves the
 //!    current node back. An `add!` evaluates its value and adds it.
 //!
@@ -61,12 +71,20 @@
 #![warn(missing_docs)]
 
 mod alloc;
+#[cfg(feature = "log")]
+mod bridge;
 mod context;
+mod events;
 mod record;
+mod sinks;
 
 pub use alloc::Alloc;
-pub use context::{current, now, Clock, Context, Guard, Handle};
+#[cfg(feature = "log")]
+pub use bridge::{LogSink, Logger};
+pub use context::{current, now, Builder, Clock, Context, Guard, Handle};
+pub use events::{Event, Kind};
 pub use record::{Calibration, Node, Param, Record};
+pub use sinks::{Buffer, Path, Sink, Stderr};
 
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
@@ -81,6 +99,10 @@ const SCHEMA: u32 = 1;
 /// rounds was measured to return an inner constant of 0.
 #[cfg(feature = "on")]
 const CALIBRATION_SCOPES: u32 = 4096;
+
+/// Distinct events at WARN and above a context keeps for its record; further
+/// ones are counted as dropped.
+const WARNINGS: usize = 100;
 
 /// Importance of a call site. A site is active when its level is at most the
 /// threshold of the current context.
@@ -106,11 +128,11 @@ impl Level {
 }
 
 /// A call site: one static per macro expansion, given a dense id on first use.
-/// For a scope site the id indexes the sites of the record; for an `add!`
-/// site it is the id of the measure of that name.
+/// The id indexes the sites of the record and the per-thread decision whether
+/// the site is active.
 #[derive(Debug)]
 pub struct Site {
-    /// Scope or measure name.
+    /// Scope or measure name; empty for an event site.
     pub name: &'static str,
     /// `module_path!()` of the expansion.
     pub module: &'static str,
@@ -143,10 +165,11 @@ impl Site {
         }
     }
 
-    /// The id, registered on first use as a scope site or a measure.
-    fn id(&'static self, measure: bool) -> u32 {
+    /// The id, registered on first use.
+    #[inline]
+    fn id(&'static self) -> u32 {
         match self.id.load(Relaxed) {
-            0 => alloc::quiet(|| context::register(self, measure)),
+            0 => alloc::quiet(|| context::register(self)),
             id => id - 1,
         }
     }
@@ -218,5 +241,94 @@ macro_rules! add {
     };
     ($level:ident, $name:expr, $value:expr) => {
         $crate::add!($name, $value)
+    };
+}
+
+/// Emits a message event at the current node: `error!("fmt", args..)` at
+/// level ERROR. The text is formatted only when the site is active. Without the
+/// feature `on`: the arguments are type-checked in a branch never taken.
+#[macro_export]
+macro_rules! error {
+    ($($a:tt)+) => { $crate::message!(ERROR, $($a)+) };
+}
+
+/// [`error!`] at level WARN.
+#[macro_export]
+macro_rules! warn {
+    ($($a:tt)+) => { $crate::message!(WARN, $($a)+) };
+}
+
+/// [`error!`] at level INFO.
+#[macro_export]
+macro_rules! info {
+    ($($a:tt)+) => { $crate::message!(INFO, $($a)+) };
+}
+
+/// [`error!`] at level DEBUG.
+#[macro_export]
+macro_rules! debug {
+    ($($a:tt)+) => { $crate::message!(DEBUG, $($a)+) };
+}
+
+/// [`error!`] at level TRACE.
+#[macro_export]
+macro_rules! trace {
+    ($($a:tt)+) => { $crate::message!(TRACE, $($a)+) };
+}
+
+#[doc(hidden)]
+#[cfg(feature = "on")]
+#[macro_export]
+macro_rules! message {
+    ($level:ident, $($a:tt)+) => {{
+        static SITE: $crate::Site =
+            $crate::Site::new("", module_path!(), file!(), line!(), $crate::Level::$level);
+        SITE.event(|| $crate::Kind::Message(::std::format!($($a)+)))
+    }};
+}
+
+#[doc(hidden)]
+#[cfg(not(feature = "on"))]
+#[macro_export]
+macro_rules! message {
+    ($level:ident, $($a:tt)+) => {
+        if false {
+            let _ = ::std::format_args!($($a)+);
+        }
+    };
+}
+
+/// Emits a progress event at the current node: `progress!(done, total)` at
+/// level INFO, `progress!(DEBUG, done, total)` at a given level. The values
+/// are converted with `as u64` and evaluated only when the site is active.
+#[cfg(feature = "on")]
+#[macro_export]
+macro_rules! progress {
+    ($done:expr, $total:expr) => {
+        $crate::progress!(INFO, $done, $total)
+    };
+    ($level:ident, $done:expr, $total:expr) => {{
+        static SITE: $crate::Site =
+            $crate::Site::new("", module_path!(), file!(), line!(), $crate::Level::$level);
+        SITE.event(|| $crate::Kind::Progress {
+            done: $done as u64,
+            total: $total as u64,
+        })
+    }};
+}
+
+/// Emits a progress event at the current node: `progress!(done, total)` or
+/// `progress!(DEBUG, done, total)`. Without the feature `on`: the values are
+/// type-checked in a branch never taken.
+#[cfg(not(feature = "on"))]
+#[macro_export]
+macro_rules! progress {
+    ($done:expr, $total:expr) => {
+        if false {
+            let _ = ($done, $total);
+        }
+    };
+    ($level:ident, $done:expr, $total:expr) => {
+        $crate::progress!($done, $total)
     };
 }

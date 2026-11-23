@@ -1,10 +1,12 @@
 //! The context, the thread-local state and the guards.
 
 use crate::alloc::{counts, quiet, N};
+use crate::events::Warnings;
 use crate::record::{Calibration, Node, Param, Record};
-use crate::{Level, Site};
+use crate::{Level, Sink, Site};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fmt::{self, Write};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -15,7 +17,7 @@ pub type Clock = fn() -> u64;
 /// Marks no entry, no parent, no site.
 const NONE: u32 = u32::MAX;
 
-/// Built-in measures; user measures follow with ids from 6. The last three
+/// Built-in measures; user measures follow by name. The last three
 /// are the counters of [`Alloc`](crate::Alloc), omitted from a record where
 /// they are zero at every node.
 const BUILTIN: [(&str, bool); 6] = [
@@ -34,51 +36,37 @@ const BYTES: usize = 3;
 /// One thread's built-in measures of one node.
 type Base = [AtomicU64; 6];
 
-/// Process-wide: the call sites, the user measures and the live contexts.
+/// Process-wide: the call sites and the live contexts with their highest level.
 struct Registry {
     sites: Vec<&'static Site>,
-    measures: Vec<&'static str>,
     contexts: Vec<(u64, Level, Weak<Shared>)>,
     next: u64,
 }
 
 static REGISTRY: Mutex<Registry> = Mutex::new(Registry {
     sites: Vec::new(),
-    measures: Vec::new(),
     contexts: Vec::new(),
     next: 1,
 });
 
-/// Highest threshold of all live contexts; 0 when there is none.
-static MAX: AtomicU8 = AtomicU8::new(0);
+/// Highest threshold or filter level of all live contexts; 0 when there is none.
+pub(crate) static MAX: AtomicU8 = AtomicU8::new(0);
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Registers a site as a scope site or as a measure (by name) and returns its id.
+/// Registers a site and returns its id.
 #[cold]
-pub(crate) fn register(site: &'static Site, measure: bool) -> u32 {
+pub(crate) fn register(site: &'static Site) -> u32 {
     let mut r = lock(&REGISTRY);
-    let id = match site.id.load(Relaxed) {
-        0 if measure => {
-            BUILTIN.len()
-                + match r.measures.iter().position(|&m| m == site.name) {
-                    Some(i) => i,
-                    None => {
-                        r.measures.push(site.name);
-                        r.measures.len() - 1
-                    }
-                }
-        }
-        0 => {
-            r.sites.push(site);
-            r.sites.len() - 1
-        }
-        id => return id - 1,
-    } as u32;
-    site.id.store(id + 1, Relaxed);
-    id
+    if let id @ 1.. = site.id.load(Relaxed) {
+        return id - 1;
+    }
+    r.sites.push(site);
+    let id = r.sites.len() as u32;
+    site.id.store(id, Relaxed);
+    id - 1
 }
 
 /// The default clock: `std::time::Instant` since the first read in the process.
@@ -92,18 +80,58 @@ pub fn now() -> u64 {
 }
 
 /// The default clock on wasm32: none, every time is zero. The host passes its
-/// own clock to [`Context::with`].
+/// own clock to [`Builder::clock`].
 #[cfg(target_arch = "wasm32")]
 pub fn now() -> u64 {
     0
 }
 
 /// Shared by a context, its guards and the threads that entered it.
-struct Shared {
+pub(crate) struct Shared {
     id: u64,
     threshold: Level,
-    clock: Clock,
+    filters: Vec<(String, Level)>,
+    pub(crate) clock: Clock,
     tree: Mutex<Tree>,
+    pub(crate) sinks: Vec<Box<dyn Sink>>,
+    pub(crate) warnings: Mutex<Warnings>,
+}
+
+impl Shared {
+    /// The level up to which sites of `module` are active: that of the
+    /// longest filter prefix covering the module, else the threshold.
+    pub(crate) fn level(&self, module: &str) -> Level {
+        let covers = |p: &str| {
+            module
+                .strip_prefix(p)
+                .is_some_and(|r| r.is_empty() || r.starts_with("::"))
+        };
+        self.filters
+            .iter()
+            .filter(|f| covers(&f.0))
+            .max_by_key(|f| f.0.len())
+            .map_or(self.threshold, |f| f.1)
+    }
+
+    /// Writes the scope names from the root to `node`, joined by `/`.
+    pub(crate) fn path(&self, node: u32, f: &mut fmt::Formatter) -> fmt::Result {
+        let t = lock(&self.tree);
+        let r = lock(&REGISTRY);
+        let mut names = Vec::new();
+        let mut n = node;
+        while n != 0 {
+            let (p, s) = t.keys[n as usize];
+            names.push(r.sites[s as usize].name);
+            n = p;
+        }
+        for (i, name) in names.iter().rev().enumerate() {
+            if i > 0 {
+                f.write_char('/')?;
+            }
+            f.write_str(name)?;
+        }
+        Ok(())
+    }
 }
 
 /// The nodes and every thread's cells of one context.
@@ -112,7 +140,7 @@ struct Tree {
     keys: Vec<(u32, u32)>,
     index: BTreeMap<(u32, u32), u32>,
     bases: Vec<(u32, Box<Base>)>,
-    /// (node, measure, value) of user measures.
+    /// (node, `add!` site, value) of user measures.
     extras: Vec<(u32, u32, Box<AtomicU64>)>,
     threads: u32,
     params: Vec<(String, Param)>,
@@ -137,7 +165,8 @@ struct Entry {
     live: Option<Arc<Shared>>,
     depth: u32,
     clock: Clock,
-    threshold: Level,
+    /// By site id: 0 undecided, 1 inactive, 2 active in this context.
+    active: Vec<u8>,
     /// This thread's cells and child cache, by node id.
     nodes: Vec<Local>,
 }
@@ -227,21 +256,33 @@ impl Entry {
         c
     }
 
-    /// This thread's cell of a user measure at `node`, allocated on first use.
-    fn extra(&mut self, node: u32, measure: u32) -> &AtomicU64 {
+    /// This thread's cell of an `add!` site at `node`, allocated on first use.
+    fn extra(&mut self, node: u32, site: u32) -> &AtomicU64 {
         let local = &self.nodes[node as usize];
-        let p = match local.extras.iter().find(|e| e.0 == measure) {
+        let p = match local.extras.iter().find(|e| e.0 == site) {
             Some(&(_, p)) => p,
             None => quiet(|| {
                 let b = Box::<AtomicU64>::default();
                 let p: *const AtomicU64 = &*b;
-                lock(&self.shared().tree).extras.push((node, measure, b));
-                self.nodes[node as usize].extras.push((measure, p));
+                lock(&self.shared().tree).extras.push((node, site, b));
+                self.nodes[node as usize].extras.push((site, p));
                 p
             }),
         };
         // SAFETY: as in `base`.
         unsafe { &*p }
+    }
+
+    /// Decides once whether `site` is active in this context.
+    #[cold]
+    #[inline(never)]
+    fn decide(&mut self, site: &Site, id: usize) -> bool {
+        let on = site.level <= self.shared().level(site.module);
+        if self.active.len() <= id {
+            quiet(|| self.active.resize(id + 1, 0));
+        }
+        self.active[id] = 1 + on as u8;
+        on
     }
 }
 
@@ -259,7 +300,7 @@ impl Thread {
             live: None,
             depth: 0,
             clock: shared.clock,
-            threshold: shared.threshold,
+            active: Vec::new(),
             nodes: Vec::new(),
         };
         match self.entries.iter().position(|e| e.weak.strong_count() == 0) {
@@ -274,11 +315,36 @@ impl Thread {
         }
     }
 
-    /// The current entry if `site` is active in it.
-    fn active(&mut self, site: &Site) -> Option<&mut Entry> {
+    /// The current entry and the site id if `site` is active in it.
+    #[inline]
+    fn active(&mut self, site: &'static Site) -> Option<(&mut Entry, u32)> {
         let e = self.entries.get_mut(self.cur.entry as usize)?;
-        (site.level <= e.threshold).then_some(e)
+        let id = site.id();
+        let on = match e.active.get(id as usize) {
+            Some(&d) if d != 0 => d == 2,
+            _ => e.decide(site, id as usize),
+        };
+        on.then_some((e, id))
     }
+}
+
+/// The current context and node of this thread if `site` is active there,
+/// or for `None` if a site of `level` in `module` would be.
+pub(crate) fn here(
+    site: Option<&'static Site>,
+    level: Level,
+    module: &str,
+) -> Option<(Arc<Shared>, u32)> {
+    THREAD.with(|t| {
+        let t = &mut *t.borrow_mut();
+        let node = t.cur.node;
+        let e = match site {
+            Some(s) => t.active(s)?.0,
+            None => t.entries.get_mut(t.cur.entry as usize)?,
+        };
+        let shared = e.live.clone()?;
+        (site.is_some() || level <= shared.level(module)).then_some((shared, node))
+    })
 }
 
 impl Site {
@@ -291,10 +357,10 @@ impl Site {
         THREAD.with(|t| {
             let t = &mut *t.borrow_mut();
             let prev = t.cur;
-            let Some(e) = t.active(self) else {
+            let Some((e, id)) = t.active(self) else {
                 return Guard::IDLE;
             };
-            let node = e.child(prev.node, self.id(false));
+            let node = e.child(prev.node, id);
             let (ctx, start) = (e.id, (e.clock)());
             t.cur.node = node;
             Guard {
@@ -319,8 +385,8 @@ impl Site {
         let cell = THREAD.with(|t| {
             let t = &mut *t.borrow_mut();
             let node = t.cur.node;
-            let e = t.active(self)?;
-            Some(e.extra(node, self.id(true)) as *const AtomicU64)
+            let (e, id) = t.active(self)?;
+            Some(e.extra(node, id) as *const AtomicU64)
         });
         if let Some(c) = cell {
             // The value is evaluated outside the borrow, so it may enter
@@ -485,21 +551,58 @@ impl Default for Context {
     }
 }
 
-impl Context {
-    /// A context at threshold INFO with the default clock [`now`].
-    pub fn new() -> Context {
-        Context::with(Level::INFO, now)
+/// The settings of a context, fixed when it is built: threshold, filters,
+/// clock and sinks.
+pub struct Builder {
+    threshold: Level,
+    filters: Vec<(String, Level)>,
+    clock: Clock,
+    sinks: Vec<Box<dyn Sink>>,
+}
+
+impl Builder {
+    /// The level up to which sites outside every filter are active; INFO by
+    /// default.
+    pub fn threshold(mut self, level: Level) -> Builder {
+        self.threshold = level;
+        self
     }
 
-    /// A context with a threshold and a clock.
-    pub fn with(threshold: Level, clock: Clock) -> Context {
+    /// The level up to which sites in module `prefix` and its submodules are
+    /// active (`a::b` covers `a::b` and `a::b::c`, not `a::bc`). Of several
+    /// filters covering a module the longest prefix applies.
+    pub fn filter(mut self, prefix: &str, level: Level) -> Builder {
+        self.filters.push((prefix.to_string(), level));
+        self
+    }
+
+    /// The clock; [`now`] by default.
+    pub fn clock(mut self, clock: Clock) -> Builder {
+        self.clock = clock;
+        self
+    }
+
+    /// Adds a sink that receives every event of the context.
+    pub fn sink(mut self, sink: impl Sink + 'static) -> Builder {
+        self.sinks.push(Box::new(sink));
+        self
+    }
+
+    /// The context.
+    pub fn build(self) -> Context {
+        let max = self
+            .filters
+            .iter()
+            .map(|f| f.1)
+            .fold(self.threshold, Level::max);
         let mut r = lock(&REGISTRY);
         let id = r.next;
         r.next += 1;
         let shared = Arc::new(Shared {
             id,
-            threshold,
-            clock,
+            threshold: self.threshold,
+            filters: self.filters,
+            clock: self.clock,
             tree: Mutex::new(Tree {
                 keys: vec![(NONE, NONE)],
                 index: BTreeMap::new(),
@@ -508,10 +611,30 @@ impl Context {
                 threads: 0,
                 params: Vec::new(),
             }),
+            sinks: self.sinks,
+            warnings: Mutex::default(),
         });
-        r.contexts.push((id, threshold, Arc::downgrade(&shared)));
-        MAX.fetch_max(threshold.0, Relaxed);
+        r.contexts.push((id, max, Arc::downgrade(&shared)));
+        MAX.fetch_max(max.0, Relaxed);
         Context { shared }
+    }
+}
+
+impl Context {
+    /// A context at threshold INFO with the default clock [`now`], no filter
+    /// and no sink.
+    pub fn new() -> Context {
+        Context::builder().build()
+    }
+
+    /// The builder of a context with other settings.
+    pub fn builder() -> Builder {
+        Builder {
+            threshold: Level::INFO,
+            filters: Vec::new(),
+            clock: now,
+            sinks: Vec::new(),
+        }
     }
 
     /// Makes the root current on this thread until the guard drops. Scopes
@@ -559,8 +682,8 @@ impl Context {
             }
         }
         let mut measures: Vec<(&'static str, bool)> = BUILTIN.to_vec();
-        for (n, m, c) in &t.extras {
-            let name = r.measures[*m as usize - BUILTIN.len()];
+        for (n, s, c) in &t.extras {
+            let name = r.sites[*s as usize].name;
             let values = &mut nodes[*n as usize].values;
             match values.iter_mut().find(|v| v.0 == name) {
                 Some(v) => v.1 += c.load(Relaxed),
@@ -582,7 +705,10 @@ impl Context {
         let mut sites: Vec<u32> = t.keys[1..].iter().map(|k| k.1).collect();
         sites.sort_unstable();
         sites.dedup();
+        let w = lock(&self.shared.warnings);
         Record {
+            warnings: w.kept.clone(),
+            warnings_dropped: w.dropped,
             params: t.params.clone(),
             calibration,
             threads: t.threads,
@@ -601,7 +727,10 @@ impl Context {
 /// that (outer).
 #[cfg(feature = "on")]
 fn calibrate(clock: Clock) -> Calibration {
-    let ctx = Context::with(Level::TRACE, clock);
+    let ctx = Context::builder()
+        .threshold(Level::TRACE)
+        .clock(clock)
+        .build();
     let _on = ctx.enter();
     let mut walls = [(0, 0); 2];
     for w in &mut walls {

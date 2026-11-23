@@ -1,7 +1,7 @@
 //! Tree structure, threads and handles, the threshold and the record.
 #![cfg(feature = "on")]
 
-use rsprobe::{add, current, scope, Context, Level, Param};
+use rsprobe::{add, current, scope, Context, Param};
 
 fn leaf() {
     let _s = scope!("leaf");
@@ -73,7 +73,7 @@ fn threads_and_handles_sum_under_their_node() {
 
 #[test]
 fn below_threshold_records_nothing() {
-    let ctx = Context::with(Level::INFO, rsprobe::now);
+    let ctx = Context::new();
     {
         let _on = ctx.enter();
         let _s = scope!(DEBUG, "fine");
