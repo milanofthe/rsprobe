@@ -53,8 +53,9 @@ pub struct Node {
     pub parent: Option<u32>,
     /// Scope site id; `None` for the root.
     pub site: Option<u32>,
-    /// Summed values per measure name: `calls`, `wall`, `busy` (ns), then the
-    /// user measures present at this node.
+    /// Summed values per measure name: `calls`, `wall`, `busy` (ns), `bytes`,
+    /// `allocs`, `freed` where any node has them, then the user measures
+    /// present at this node.
     pub values: Vec<(&'static str, u64)>,
 }
 

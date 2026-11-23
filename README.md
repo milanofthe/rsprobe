@@ -35,6 +35,13 @@ let _on = ctx.enter();
 println!("{}", ctx.record()); // one JSON document
 ```
 
+With the feature `alloc` the binary installs the counting allocator, which adds `bytes`, `allocs` and `freed` to every scope; without the feature it only forwards:
+
+```rust
+#[global_allocator]
+static A: rsprobe::Alloc = rsprobe::Alloc::new();
+```
+
 A thread pool takes the current node where a section starts and enters it in each task, so the task's scopes hang under that node and its time counts as `busy` next to the caller's `wall`:
 
 ```rust

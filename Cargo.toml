@@ -11,6 +11,8 @@ description = "Scopes, additive measures and one run record for numerical solver
 # Without `on` every macro expands to `()` and records nothing.
 default = []
 on = []
+# Counts allocations through `Alloc` into `bytes`, `allocs` and `freed`.
+alloc = ["on"]
 
 [dev-dependencies]
 # Parses the record in the tests.
