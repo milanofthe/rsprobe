@@ -73,7 +73,7 @@ rsprobe::debug!("pivot growth {:.2e}", g);
 rsprobe::progress!(step, steps);
 ```
 
-Progress events of a call site pass at most once a second (`Builder::progress_interval`), and the closing one (`done == total`) where the run reported before: a loop calls `progress!` every pass, work shorter than the interval reports nothing. A text follows a semicolon and is formatted only when the event passes; a total of 0 stands for one that is not known: `progress!(k, 0; "residual {:.1e}", r)`.
+Progress events of a call site pass at most once a second (`Builder::progress_interval`), counted from the first event of a run, and the closing one (`done == total`) where the run reported before: a loop calls `progress!` every pass, and a run shorter than the interval reports nothing, however often it repeats. A text follows a semicolon and is formatted only when the event passes; a total of 0 stands for one that is not known: `progress!(k, 0; "residual {:.1e}", r)`.
 
 `Stderr` writes one line per event: seconds since the context was built, level, path of the node, text. On a terminal a line is set in the style of its level (ERROR red, WARN yellow, DEBUG and TRACE dim; not with `NO_COLOR` set) and progress is one line rewritten in place.
 

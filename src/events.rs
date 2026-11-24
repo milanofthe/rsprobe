@@ -165,18 +165,24 @@ pub(crate) fn emit(
     })
 }
 
-/// A progress site of a context: when its last event passed, in ns since
-/// the context was built, and whether an event of its current run passed.
+/// A progress site of a context and its current run, times in ns since the
+/// context was built.
 pub(crate) struct Paced {
     site: (&'static str, u32),
-    at: u64,
+    /// Whether a run is going: begun by an event and not closed.
+    running: bool,
+    /// When the run began or its last event passed, whichever is later.
+    since: u64,
+    /// Whether an event of the run passed.
     open: bool,
+    /// Units done at the site's last event.
+    done: u64,
 }
 
-/// Whether the progress event of the site at (file, line) passes now, by the
-/// rule of [`Builder::progress_interval`](crate::Builder::progress_interval);
-/// `last` for its closing event.
-fn due(shared: &Shared, site: (&'static str, u32), last: bool) -> bool {
+/// Whether the progress event of the site at (file, line) with `done` of
+/// `total` units passes now, by the rule of
+/// [`Builder::progress_interval`](crate::Builder::progress_interval).
+fn due(shared: &Shared, site: (&'static str, u32), done: u64, total: u64) -> bool {
     let now = (shared.cfg.clock)() - shared.start;
     let mut sites = lock(&shared.progress);
     let i = sites
@@ -185,16 +191,26 @@ fn due(shared: &Shared, site: (&'static str, u32), last: bool) -> bool {
         .unwrap_or_else(|| {
             sites.push(Paced {
                 site,
-                at: 0,
+                running: false,
+                since: 0,
                 open: false,
+                done: 0,
             });
             sites.len() - 1
         });
     let s = &mut sites[i];
-    let pass = now - s.at >= shared.cfg.progress || (last && s.open);
-    if pass {
-        (s.at, s.open) = (now, !last);
+    // A run begins with the first event after a closing one, and without a
+    // total where the units go down. With a total they may arrive out of
+    // order from the threads of one run.
+    if !s.running || (total == 0 && done < s.done) {
+        (s.running, s.since, s.open) = (true, now, false);
     }
+    let last = total > 0 && done >= total;
+    let pass = now - s.since >= shared.cfg.progress || (last && s.open);
+    if pass {
+        (s.since, s.open) = (now, true);
+    }
+    (s.done, s.running) = (done, !last);
     pass
 }
 
@@ -221,7 +237,7 @@ impl Site {
         let here = self.active(|cur, e, _| (e.shared().clone(), cur.node, e.thread));
         if let Some(here) = here {
             let (done, total) = units();
-            if due(&here.0, (self.file, self.line), total > 0 && done >= total) {
+            if due(&here.0, (self.file, self.line), done, total) {
                 let site = (self.level, self.module, self.file, self.line);
                 emit(here, site, || Kind::Progress {
                     done,
