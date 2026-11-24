@@ -12,6 +12,14 @@ use std::sync::{Arc, Mutex};
 pub trait Sink: Send + Sync {
     /// Takes one event; `path` renders the path of its node.
     fn event(&self, event: &Event, path: &Path);
+
+    /// Whether the sink takes every event. `false`, the default, is for a
+    /// sink that writes for a reader: of the events at WARN and above with
+    /// the same site and text it gets the first, the tenth, the hundredth
+    /// and so on, the count appended to the text (`small pivot (10 times)`).
+    fn every(&self) -> bool {
+        false
+    }
 }
 
 /// The path of a node: `Display` writes the scope names from the root to the
@@ -120,5 +128,10 @@ impl Sink for Buffer {
     fn event(&self, e: &Event, path: &Path) {
         let path = path.to_string();
         lock(&self.0).push((e.clone(), path));
+    }
+
+    /// Every event: what a host does with a repeated one is its own rule.
+    fn every(&self) -> bool {
+        true
     }
 }

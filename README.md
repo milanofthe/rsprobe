@@ -73,7 +73,7 @@ rsprobe::debug!("pivot growth {:.2e}", g);
 rsprobe::progress!(step, steps);
 ```
 
-Progress events of a call site pass at most once a second (`Builder::progress_interval`), and the closing one (`done == total`) where the run reported before: a loop calls `progress!` every pass, work shorter than the interval reports nothing.
+Progress events of a call site pass at most once a second (`Builder::progress_interval`), and the closing one (`done == total`) where the run reported before: a loop calls `progress!` every pass, work shorter than the interval reports nothing. A text follows a semicolon and is formatted only when the event passes; a total of 0 stands for one that is not known: `progress!(k, 0; "residual {:.1e}", r)`.
 
 `Stderr` writes one line per event: seconds since the context was built, level, path of the node, text. On a terminal a line is set in the style of its level (ERROR red, WARN yellow, DEBUG and TRACE dim; not with `NO_COLOR` set) and progress is one line rewritten in place.
 
@@ -86,7 +86,7 @@ Progress events of a call site pass at most once a second (`Builder::progress_in
 
 The threshold says what is recorded, a sink's level what it is shown: `.sink_at(Level::WARN, Stderr::default())` under a threshold of INFO keeps the scopes, so a warning is shown with its path, without the INFO messages.
 
-Formatting and the sinks run on the emitting thread. Their time is the noisy measure `emit` of the event's node and is taken out of `wall` and `busy` of the scopes open on that thread, so a profile does not change with the amount of output; the trace keeps the spans as the clock gave them. Of the events at WARN and above with the same site and text, the sinks get the first, the tenth, the hundredth and so on, with the count appended (`small pivot (10 times)`); the record has every count.
+Formatting and the sinks run on the emitting thread. Their time is the noisy measure `emit` of the event's node and is taken out of `wall` and `busy` of the scopes open on that thread, so a profile does not change with the amount of output; the trace keeps the spans as the clock gave them. Of the events at WARN and above with the same site and text, a sink that writes for a reader (`Stderr`, the `log` bridge, the default of the `Sink` trait) gets the first, the tenth, the hundredth and so on, with the count appended (`small pivot (10 times)`); a `Buffer` gets every event, and the record has every count.
 
 A host that must not be called from worker threads (a Python interpreter, a wasm host) attaches a `Buffer` and drains it on its own thread:
 
