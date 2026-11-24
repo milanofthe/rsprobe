@@ -22,27 +22,21 @@ fn a_site_reports_once_an_interval_and_the_end_of_a_run_it_reported() {
         .sink(buffer.clone())
         .build();
     let _on = ctx.enter();
-    // A long run: nothing in the first second, then once a second and its end.
+    // A long run: nothing in its first second, then once a second and its end.
     step(200, 1);
     step(1000, 2);
     step(1500, 3);
     step(2100, 4);
-    step(2200, 10);
-    // A short run right after it: nothing, also not its end.
-    step(2300, 5);
-    step(2400, 10);
-    // The next run starts a second later: its first event and its end.
-    step(3300, 1);
-    step(3350, 10);
+    step(2600, 5);
+    step(2700, 10);
+    // Short runs, also long after the last event that passed: nothing.
+    step(2800, 5);
+    step(2900, 10);
+    step(9000, 1);
+    step(9050, 10);
     let mut seen = Vec::new();
     buffer.drain(|e, _| seen.push((e.time / 1_000_000, e.kind.to_string())));
-    let expected = [
-        (1000, "2/10"),
-        (2100, "4/10"),
-        (2200, "10/10"),
-        (3300, "1/10"),
-        (3350, "10/10"),
-    ];
+    let expected = [(1500, "3/10"), (2600, "5/10"), (2700, "10/10")];
     assert_eq!(seen, expected.map(|(t, s)| (t, s.to_string())));
     // With a text and no known total: the text is formatted when the event
     // passes, and no event closes the run.
@@ -54,11 +48,15 @@ fn a_site_reports_once_an_interval_and_the_end_of_a_run_it_reported() {
             1.0 / k as f64
         });
     };
-    residual(1, 5000);
-    residual(2, 5100);
-    residual(4, 6000);
+    residual(1, 10000);
+    residual(2, 10100);
+    residual(4, 11000);
+    // The units go down: a new run, silent in its first second.
+    residual(1, 13000);
+    residual(2, 13900);
+    residual(3, 14000);
     let mut seen = Vec::new();
     buffer.drain(|e, _| seen.push(e.kind.to_string()));
-    assert_eq!(seen, ["1 residual 1", "4 residual 0.25"]);
+    assert_eq!(seen, ["4 residual 0.25", "3 residual 0.3333333333333333"]);
     assert_eq!(formatted.load(SeqCst), 2);
 }

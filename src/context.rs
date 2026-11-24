@@ -190,11 +190,13 @@ impl Builder {
     }
 
     /// The least time in ns between two progress events of a call site; one
-    /// second by default, 0 for every event. A site's event passes when that
-    /// long has gone by since its last one that passed (since the context
-    /// was built for its first), and its closing event (`done >= total`)
-    /// where one of the run passed before: work shorter than the interval
-    /// reports nothing, longer work at most once an interval and its end.
+    /// second by default, 0 for every event. A run of a site begins with its
+    /// first event and ends with its closing one (`done >= total`); without
+    /// a total a new run begins where the units go down. An event passes
+    /// when the interval has gone by since the run began or its last event
+    /// passed, and the closing event where one of the run passed before: a
+    /// run shorter than the interval reports nothing, however often it
+    /// repeats, a longer one at most once an interval and its end.
     pub fn progress_interval(mut self, ns: u64) -> Builder {
         self.progress = ns;
         self
