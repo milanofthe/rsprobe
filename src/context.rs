@@ -192,7 +192,8 @@ impl Builder {
     /// The least time in ns between two progress events of a call site; one
     /// second by default, 0 for every event. A run of a site begins with its
     /// first event and ends with its closing one (`done >= total`); without
-    /// a total a new run begins where the units go down. An event passes
+    /// a total each thread has a run of its own, and a new one begins where
+    /// the units go down. An event passes
     /// when the interval has gone by since the run began or its last event
     /// passed, and the closing event where one of the run passed before: a
     /// run shorter than the interval reports nothing, however often it
