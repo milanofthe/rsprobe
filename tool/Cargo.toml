@@ -1,0 +1,20 @@
+[package]
+name = "rsprobe-tool"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Milan Rother"]
+repository = "https://github.com/milanofthe/rsprobe"
+description = "Reads rsprobe run records and traces: report, compare, ab, scale, critical"
+
+[[bin]]
+name = "rsprobe"
+path = "src/main.rs"
+
+[dependencies]
+rsprobe = { path = ".." }
+
+# Its binary is also the command `ab` runs in the test.
+[[test]]
+name = "ab"
+harness = false

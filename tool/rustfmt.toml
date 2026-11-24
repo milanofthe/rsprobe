@@ -1,0 +1,2 @@
+# Short constructs on one line, as in the tables they format.
+use_small_heuristics = "Max"
