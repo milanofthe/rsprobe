@@ -2,7 +2,7 @@
 //! then checks that the module imports nothing.
 //!
 //!     cargo build --release --example wasm_probe --target wasm32-unknown-unknown --features on
-//!     python3 scripts/wasm_imports.py target/wasm32-unknown-unknown/release/examples/wasm_probe.wasm
+//!     cargo run -p rsprobe-tool --example wasm_imports -- target/wasm32-unknown-unknown/release/examples/wasm_probe.wasm
 
 use rsprobe::{add, current, info, progress, scope, warn, Buffer, Context, Level, Stderr};
 use std::hint::black_box;

@@ -7,14 +7,17 @@ cd "$(dirname "$0")/.."
 PATH="$(dirname "$(rustup which cargo --toolchain stable)"):$PATH"
 export PATH CARGO_TERM_COLOR=always
 run() { echo "== $*"; "$@"; }
-run cargo fmt --check
+run cargo fmt --all --check
+# The target directory, as cargo resolves it from the environment.
+T=${CARGO_TARGET_DIR:-target}
 for f in "" on alloc log alloc,log; do
     run cargo clippy --all-targets --features "$f" -- -D warnings
     run cargo test --features "$f"
     # The crate in a browser: linked and importing nothing.
     run cargo build --release --example wasm_probe --target wasm32-unknown-unknown --features "$f"
-    run python3 scripts/wasm_imports.py target/wasm32-unknown-unknown/release/examples/wasm_probe.wasm
+    run cargo run --quiet -p rsprobe-tool --example wasm_imports -- "$T/wasm32-unknown-unknown/release/examples/wasm_probe.wasm"
 done
-# The tool, standard library only; its round trip builds examples/workload.rs.
-run python3 -m unittest discover -s tool/tests -t tool
+# The tool (tool/); its round trip builds examples/workload.rs.
+run cargo clippy -p rsprobe-tool --all-targets -- -D warnings
+run cargo test -p rsprobe-tool
 echo "== green"
