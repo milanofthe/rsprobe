@@ -16,6 +16,7 @@ fn main() {
         .threshold(Level::DEBUG)
         .filter("wasm_probe::quiet", Level::WARN)
         .clock(rsprobe::now)
+        .progress_interval(0)
         .sink(Stderr::default())
         .sink(buffer.clone())
         .stream();

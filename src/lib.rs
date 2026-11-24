@@ -113,6 +113,11 @@ const CALIBRATION_SCOPES: u32 = 4096;
 /// ones are counted as dropped.
 const WARNINGS: usize = 100;
 
+/// Default least time between two progress events of a call site, in ns. A
+/// rule, not a measurement: a line a second reads as progress on a terminal
+/// and adds 3600 lines an hour to a log file.
+const PROGRESS_NS: u64 = 1_000_000_000;
+
 /// The static call site of one macro expansion, as `&'static Site`.
 #[doc(hidden)]
 #[macro_export]

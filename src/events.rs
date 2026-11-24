@@ -123,6 +123,11 @@ pub(crate) fn emit(
             time: begin - shared.start,
             kind: kind(),
         };
+        if let Kind::Progress { done, total } = e.kind {
+            if !due(&shared, (file, line), e.time, done >= total) {
+                return;
+            }
+        }
         if let Some(s) = &shared.stream {
             lock(s).events.push((thread, e.clone()));
         }
@@ -146,6 +151,38 @@ pub(crate) fn emit(
         with_current(|_, e| e.out += ns);
         crate::time!(ERROR, "emit", ns);
     })
+}
+
+/// A progress site of a context: when its last event passed, in ns since
+/// the context was built, and whether an event of its current run passed.
+pub(crate) struct Paced {
+    site: (&'static str, u32),
+    at: u64,
+    open: bool,
+}
+
+/// Whether the progress event of the site at (file, line) at `now` passes,
+/// by the rule of [`Builder::progress_interval`](crate::Builder::progress_interval);
+/// `last` for its closing event.
+fn due(shared: &Shared, site: (&'static str, u32), now: u64, last: bool) -> bool {
+    let mut sites = lock(&shared.progress);
+    let i = sites
+        .iter()
+        .position(|s| s.site == site)
+        .unwrap_or_else(|| {
+            sites.push(Paced {
+                site,
+                at: 0,
+                open: false,
+            });
+            sites.len() - 1
+        });
+    let s = &mut sites[i];
+    let pass = now - s.at >= shared.cfg.progress || (last && s.open);
+    if pass {
+        (s.at, s.open) = (now, !last);
+    }
+    pass
 }
 
 impl Site {
