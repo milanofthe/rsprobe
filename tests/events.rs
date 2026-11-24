@@ -15,7 +15,10 @@ fn drained(b: &Buffer) -> Vec<(String, String)> {
 #[test]
 fn a_message_lands_at_its_node_also_through_a_handle() {
     let buffer = Buffer::default();
-    let ctx = Context::builder().sink(buffer.clone()).build();
+    let ctx = Context::builder()
+        .progress_interval(0)
+        .sink(buffer.clone())
+        .build();
     {
         let _on = ctx.enter();
         info!("at the root");

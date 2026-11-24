@@ -1,7 +1,7 @@
 //! The context: its settings, its tree, and the assembly of the record.
 
 use crate::alloc::quiet;
-use crate::events::Warnings;
+use crate::events::{Paced, Warnings};
 use crate::record::{Calibration, Node, Param, Record, ThreadNodes};
 use crate::site::{lock, registry, Registry};
 use crate::stream::Stream;
@@ -65,6 +65,7 @@ pub(crate) struct Shared {
     pub(crate) start: u64,
     pub(crate) tree: Mutex<Tree>,
     pub(crate) warnings: Mutex<Warnings>,
+    pub(crate) progress: Mutex<Vec<Paced>>,
     pub(crate) stream: Option<Mutex<Stream>>,
 }
 
@@ -149,6 +150,7 @@ pub struct Builder {
     filters: Vec<(String, Level)>,
     pub(crate) clock: Clock,
     pub(crate) sinks: Vec<(Level, Box<dyn Sink>)>,
+    pub(crate) progress: u64,
     stream: bool,
 }
 
@@ -187,6 +189,17 @@ impl Builder {
         self
     }
 
+    /// The least time in ns between two progress events of a call site; one
+    /// second by default, 0 for every event. A site's event passes when that
+    /// long has gone by since its last one that passed (since the context
+    /// was built for its first), and its closing event (`done >= total`)
+    /// where one of the run passed before: work shorter than the interval
+    /// reports nothing, longer work at most once an interval and its end.
+    pub fn progress_interval(mut self, ns: u64) -> Builder {
+        self.progress = ns;
+        self
+    }
+
     /// Keeps every guard's span, every event and every `add!` value with its
     /// time, for [`Context::trace`]. Each thread appends to a buffer of its
     /// own and moves it to the context when its outermost guard drops.
@@ -216,6 +229,7 @@ impl Builder {
                 params: Vec::new(),
             }),
             warnings: Mutex::default(),
+            progress: Mutex::default(),
         });
         registry().insert(id, max, Arc::downgrade(&shared));
         Context { shared }
@@ -257,6 +271,7 @@ impl Context {
             filters: Vec::new(),
             clock: now,
             sinks: Vec::new(),
+            progress: crate::PROGRESS_NS,
             stream: false,
         }
     }
