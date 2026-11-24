@@ -107,9 +107,18 @@ std::fs::write("solve.trace.json", ctx.trace())?;
 
 ## Tool
 
-`tool/` reads records and traces: a Python package, standard library only, Python 3.9+. Run it as `python -m rsprobe <command>` from `tool/`, or install it with `pip install ./tool`. A set of records is a record file or a directory of them.
+`tool/` reads records and traces: the crate `rsprobe-tool`, without dependencies besides `rsprobe`. Run it as `cargo run -p rsprobe-tool -- <command>`, or install the binary `rsprobe` with `cargo install --path tool`. A set of records is a record file or a directory of them.
 
-`report RECORD...`: the tree with the scope cost subtracted (`X' = X - calls inner - (scope instances below) (inner + outer)`, from the record's calibration), self time, the share of the run, the estimated scope cost per node (`!` above 10 percent), and per node the time per unit of each exact measure at scopes whose children ran in their domain, each noisy one (`time!`) in ms and as a share of the node's time, each `max!` measure as a level, and busy over wall. Over several records each noisy value is their median with the range `[min..max]`, an exact one is shown once where the records agree and as its range where not, a `max!` one is the largest; `--sum` shows the sums instead. `--ratio A/B` adds measure A over measure B per node (`width/sections`, a predicted time over `wall`); repeatable. The warnings the records collected follow the tree, with their count and node. Sibling scopes are matched by module and name. `--folded` writes folded stacks for a flame graph, `--json` the rows. `--threads [NODE]` lists, for records taken with `record_threads()`, each thread's values at a node (`pairs/task`) or at every node, with its busy time over the mean of the threads at that node:
+The commands are library functions on `rsprobe::Record`, so a program or a test reads its own record in process, without a file:
+
+```rust
+let runs = [rsprobe_tool::Run::new("solve", ctx.record())];
+println!("{}", rsprobe_tool::report::text(&runs, &[], false));
+let before = rsprobe_tool::load_set(&["before/"])?;
+let c = rsprobe_tool::compare::compare(&before, &runs, None, &["wall"]);
+```
+
+`report RECORD...`: the tree with the scope cost subtracted (`X' = X - calls inner - (scope instances below) (inner + outer)`, from the record's calibration), self time, the share of the run, the estimated scope cost per node (`!` above 10 percent), and per node the time per unit of each exact measure at scopes whose children ran in their domain, each noisy one (`time!`) in ms and as a share of the node's time, each `max!` measure as a level, and busy over wall. Over several records each noisy value is their median with the range `[min..max]`, an exact one is shown once where the records agree and as its range where not, a `max!` one is the largest; `--sum` shows the sums instead. `--ratio A/B` adds measure A over measure B per node (`width/sections`, a predicted time over `wall`); repeatable. The warnings the records collected follow the tree, with their count and node. Sibling scopes are matched by module and name. `--folded` writes folded stacks for a flame graph. `--threads [NODE]` lists, for records taken with `record_threads()`, each thread's values at a node (`pairs/task`) or at every node, with its busy time over the mean of the threads at that node:
 
 ```
 1.json: 4 threads, recorded values (scope cost not subtracted)
