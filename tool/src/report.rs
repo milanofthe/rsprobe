@@ -35,7 +35,10 @@ pub fn medians(runs: &[Run]) -> (Nodes, Values, Map<Path, Spread>) {
     let (nodes, spread) = median_nodes(parts.iter().map(|p| &p.0), &union(runs, |r| r.kind("max")));
     let mut run = Values::default();
     for &(k, _) in parts.first().map_or(&[][..], |p| &p.1 .0) {
-        run.set(k, median(&parts.iter().map(|p| p.1.get(k)).collect::<Vec<_>>()));
+        run.set(
+            k,
+            median(&parts.iter().map(|p| p.1.get(k)).collect::<Vec<_>>()),
+        );
     }
     (nodes, run, spread)
 }
@@ -177,7 +180,12 @@ pub fn warnings(runs: &[Run]) -> (Vec<(Path, &'static str, String, u64)>, u64) {
         *out.entry((p, level, t), || 0) += c;
     }
     let dropped = runs.iter().map(|r| r.record.warnings_dropped).sum();
-    (out.iter().map(|((p, l, t), c)| (p.clone(), *l, t.clone(), *c)).collect(), dropped)
+    (
+        out.iter()
+            .map(|((p, l, t), c)| (p.clone(), *l, t.clone(), *c))
+            .collect(),
+        dropped,
+    )
 }
 
 /// The report as text.
@@ -198,7 +206,11 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
         format!("{n}={}", xs.join(","))
     });
     let raw = run.get("raw");
-    let cost = if raw != 0.0 { 100.0 * run.get("cost") / raw } else { 0.0 };
+    let cost = if raw != 0.0 {
+        100.0 * run.get("cost") / raw
+    } else {
+        0.0
+    };
     let mut out = vec![
         format!(
             "{k} record{}{merged}. {}",
@@ -242,13 +254,22 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
         }
     };
     for r in &rs {
-        let spread = ["calls", r.domain].into_iter().filter(|m| r.spread.iter().any(|s| s.0 == *m));
+        let spread = ["calls", r.domain]
+            .into_iter()
+            .filter(|m| r.spread.iter().any(|s| s.0 == *m));
         let mut user: Vec<String> = spread.map(|m| measure(r, m, r.v.get(m))).collect();
         user.extend(r.measures().map(|&(m, x)| measure(r, m, x)));
         user.extend(r.ratios.iter().map(|(k, x)| format!("{k} {}", g(*x, 4))));
-        let mark = if r.cost_share > OVERHEAD_MARK { "!" } else { " " };
-        let label =
-            format!("{}{}", "  ".repeat(r.path.len()), r.path.last().map_or("(run)", |s| s.0));
+        let mark = if r.cost_share > OVERHEAD_MARK {
+            "!"
+        } else {
+            " "
+        };
+        let label = format!(
+            "{}{}",
+            "  ".repeat(r.path.len()),
+            r.path.last().map_or("(run)", |s| s.0)
+        );
         out.push(format!(
             "{label:<28} {:>8} {:>10.3} {:>10.3} {:>10.3} {:>6.1}% {:>5.1}%{mark} {}",
             r.v.get("calls") as i64,
@@ -280,7 +301,10 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
         let w = names.iter().map(String::len).fold("node".len(), usize::max);
         out.push(String::new());
         out.push(format!("warnings{}:", if k > 1 { ", summed" } else { "" }));
-        out.push(format!("{:>8}  {:<w$} {:<6} text", "count", "node", "level"));
+        out.push(format!(
+            "{:>8}  {:<w$} {:<6} text",
+            "count", "node", "level"
+        ));
         for ((_, level, t, c), n) in ws.iter().zip(&names) {
             out.push(format!("{c:>8}  {n:<w$} {level:<6} {t}"));
         }
@@ -296,8 +320,13 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
 pub fn folded(runs: &[Run]) -> String {
     let (nodes, _) = summary(runs);
     let lines = preorder(&nodes.keys).into_iter().filter_map(|p| {
-        let own = nodes.get(&p).map_or(0.0, |v| v.get("self")).round_ties_even();
-        let stack: Vec<&str> = std::iter::once("run").chain(p.iter().map(|s| s.0)).collect();
+        let own = nodes
+            .get(&p)
+            .map_or(0.0, |v| v.get("self"))
+            .round_ties_even();
+        let stack: Vec<&str> = std::iter::once("run")
+            .chain(p.iter().map(|s| s.0))
+            .collect();
         (own > 0.0).then(|| format!("{} {}", stack.join(";"), own as i64))
     });
     lines.collect::<Vec<_>>().join("\n")
@@ -318,8 +347,10 @@ pub fn threads(runs: &[Run], node: Option<&str>) -> Result<String> {
         }
         let paths = preorder(ts.iter().flat_map(|t| &t.1.keys));
         let named = |p: &Path| name(p.iter().map(|s| s.0));
-        let paths: Vec<Path> =
-            paths.into_iter().filter(|p| node.is_none_or(|n| named(p) == n)).collect();
+        let paths: Vec<Path> = paths
+            .into_iter()
+            .filter(|p| node.is_none_or(|n| named(p) == n))
+            .collect();
         if paths.is_empty() {
             return Err(format!("{}: no node {}", r.file, node.unwrap_or("None")));
         }
@@ -334,21 +365,34 @@ pub fn threads(runs: &[Run], node: Option<&str>) -> Result<String> {
             "node", "thread", "via", "calls", "wall ms", "busy ms", "busy/mean"
         ));
         for p in &paths {
-            let vs: Vec<_> = ts.iter().filter_map(|(t, n)| n.get(p).map(|v| (t, v))).collect();
-            let busy: Vec<f64> = vs.iter().map(|v| v.1.get("busy")).filter(|&b| b > 0.0).collect();
-            let mean =
-                if busy.is_empty() { 0.0 } else { sum(busy.iter().copied()) / busy.len() as f64 };
-            let mut label =
-                format!("{}{}", "  ".repeat(p.len()), p.last().map_or("(run)", |s| s.0));
+            let vs: Vec<_> = ts
+                .iter()
+                .filter_map(|(t, n)| n.get(p).map(|v| (t, v)))
+                .collect();
+            let busy: Vec<f64> = vs
+                .iter()
+                .map(|v| v.1.get("busy"))
+                .filter(|&b| b > 0.0)
+                .collect();
+            let mean = if busy.is_empty() {
+                0.0
+            } else {
+                sum(busy.iter().copied()) / busy.len() as f64
+            };
+            let mut label = format!(
+                "{}{}",
+                "  ".repeat(p.len()),
+                p.last().map_or("(run)", |s| s.0)
+            );
             for (t, v) in vs {
                 let user =
-                    v.0.iter().filter(|m| !BUILTIN.contains(&m.0) && m.1 != 0.0).map(|&(m, x)| {
-                        match (max.contains(m), noisy.contains(m)) {
+                    v.0.iter()
+                        .filter(|m| !BUILTIN.contains(&m.0) && m.1 != 0.0)
+                        .map(|&(m, x)| match (max.contains(m), noisy.contains(m)) {
                             (true, _) => format!("{m} max {}", x as i64),
                             (_, true) => format!("{m} {:.3} ms", x / 1e6),
                             _ => format!("{m}={}", x as i64),
-                        }
-                    });
+                        });
                 let b = v.get("busy");
                 let line = format!(
                     "{label:<28} {:>6} {:<7} {:>8} {:>10.3} {:>10.3} {:>9}  {}",
@@ -357,7 +401,11 @@ pub fn threads(runs: &[Run], node: Option<&str>) -> Result<String> {
                     v.get("calls") as i64,
                     v.get("wall") / 1e6,
                     b / 1e6,
-                    if b != 0.0 { format!("{:.3}", b / mean) } else { String::new() },
+                    if b != 0.0 {
+                        format!("{:.3}", b / mean)
+                    } else {
+                        String::new()
+                    },
                     user.collect::<Vec<_>>().join(", ")
                 );
                 out.push(line.trim_end().to_string());

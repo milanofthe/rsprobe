@@ -60,7 +60,11 @@ pub fn schedule<T: Clone>(rounds: usize, arms: &[T], seed: u64) -> Vec<Vec<T>> {
     while out.len() < rounds && !arms.is_empty() {
         let mut shifts: Vec<usize> = (0..arms.len()).collect();
         rng.shuffle(&mut shifts);
-        out.extend(shifts.into_iter().map(|k| [&arms[k..], &arms[..k]].concat()));
+        out.extend(
+            shifts
+                .into_iter()
+                .map(|k| [&arms[k..], &arms[..k]].concat()),
+        );
     }
     out.truncate(rounds);
     out
@@ -100,7 +104,11 @@ pub fn run(
             let t = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default();
-            std::env::temp_dir().join(format!("rsprobe-ab-{}-{}", std::process::id(), t.as_nanos()))
+            std::env::temp_dir().join(format!(
+                "rsprobe-ab-{}-{}",
+                std::process::id(),
+                t.as_nanos()
+            ))
         }
     };
     let dir = |c: &str, arm: &str| out.join(c).join(arm);
@@ -119,8 +127,10 @@ pub fn run(
                 let all: Vec<&String> = cmd.iter().chain(args).collect();
                 let line = all.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
                 let t = Instant::now();
-                let status =
-                    Command::new(all[0]).args(&all[1..]).env("RSPROBE_RECORD", &path).status();
+                let status = Command::new(all[0])
+                    .args(&all[1..])
+                    .env("RSPROBE_RECORD", &path)
+                    .status();
                 match status {
                     Ok(s) if s.success() => {}
                     Ok(s) => return Err(format!("{line}: {s}")),
@@ -129,15 +139,22 @@ pub fn run(
                 if !path.exists() {
                     return Err(format!("{line} wrote no record to RSPROBE_RECORD"));
                 }
-                let case = if c.is_empty() { String::new() } else { format!("{c} ") };
+                let case = if c.is_empty() {
+                    String::new()
+                } else {
+                    format!("{c} ")
+                };
                 let secs = t.elapsed().as_secs_f64();
                 println!("round {}/{rounds} {case}{arm:<2} {secs:.3} s", k + 1);
             }
         }
     }
     println!("records in {}", out.display());
-    let sets = cases
-        .iter()
-        .map(|(c, _)| (c.clone(), (dir(c, "a"), dir(c, "b"), aa.then(|| dir(c, "aa")))));
+    let sets = cases.iter().map(|(c, _)| {
+        (
+            c.clone(),
+            (dir(c, "a"), dir(c, "b"), aa.then(|| dir(c, "aa"))),
+        )
+    });
     Ok(sets.collect())
 }

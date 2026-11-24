@@ -53,15 +53,26 @@ impl Hand {
                 }
             }
             let parent = p.split_last().map(|(_, up)| id(up));
-            Node { parent, site: p.last().map(|n| site(n)), values }
+            Node {
+                parent,
+                site: p.last().map(|n| site(n)),
+                values,
+            }
         });
         let sites = names.iter().map(|&n| {
             let s: &'static Site = Box::leak(Box::new(Site::new(n, "m", "f", 1, Level::INFO)));
             (site(n), s)
         });
         Record {
-            params: self.params.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
-            calibration: Calibration { inner_ns: self.inner, outer_ns: self.outer },
+            params: self
+                .params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+            calibration: Calibration {
+                inner_ns: self.inner,
+                outer_ns: self.outer,
+            },
             threads: 1,
             measures,
             max: self.maxima.clone(),

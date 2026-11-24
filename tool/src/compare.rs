@@ -40,7 +40,9 @@ pub struct Comparison {
 /// The value of measure x at a node in each record of a set, zero where the
 /// node is absent.
 fn series(set: &[Corrected], p: &Path, x: &str) -> Vec<f64> {
-    set.iter().map(|n| n.0.get(p).map_or(0.0, |v| v.get(x))).collect()
+    set.iter()
+        .map(|n| n.0.get(p).map_or(0.0, |v| v.get(x)))
+        .collect()
 }
 
 /// Half-width of the noise band in log ratio at a node and measure: the
@@ -55,7 +57,11 @@ fn band(aa: Option<(&[Corrected], &[Corrected])>, p: &Path, x: &str) -> f64 {
         return floor;
     }
     let (_, lo, hi) = ratio_ci(&a, &a2);
-    let lo = if lo > 0.0 { lo.ln().abs() } else { f64::INFINITY };
+    let lo = if lo > 0.0 {
+        lo.ln().abs()
+    } else {
+        f64::INFINITY
+    };
     floor.max(lo).max(hi.ln().abs())
 }
 
@@ -64,8 +70,10 @@ fn band(aa: Option<(&[Corrected], &[Corrected])>, p: &Path, x: &str) -> f64 {
 /// compared as wall and busy are; a slower verdict fails the gate only for
 /// the measures in `gate`.
 pub fn compare(a: &[Run], b: &[Run], aa: Option<&[Run]>, gate: &[&str]) -> Comparison {
-    let (ca, cb): (Vec<_>, Vec<_>) =
-        (a.iter().map(corrected).collect(), b.iter().map(corrected).collect());
+    let (ca, cb): (Vec<_>, Vec<_>) = (
+        a.iter().map(corrected).collect(),
+        b.iter().map(corrected).collect(),
+    );
     let caa: Option<Vec<_>> = aa.map(|aa| aa.iter().map(corrected).collect());
     let exact = union(a.iter().chain(b), |r| r.kind("exact"));
     let mut noisy = union(a.iter().chain(b), |r| r.kind("noisy"));
@@ -79,18 +87,25 @@ pub fn compare(a: &[Run], b: &[Run], aa: Option<&[Run]>, gate: &[&str]) -> Compa
             .map(|m| m.1.to_string())
             .collect(),
         rounds: (a.len(), b.len()),
-        band: aa.map_or("bootstrap alone".into(), |aa| format!("A/A, {} records", aa.len())),
+        band: aa.map_or("bootstrap alone".into(), |aa| {
+            format!("A/A, {} records", aa.len())
+        }),
         ..Comparison::default()
     };
     for p in preorder(all.iter().flat_map(|n| &n.0.keys)) {
-        let (in_a, in_b) =
-            (ca.iter().any(|n| n.0.get(&p).is_some()), cb.iter().any(|n| n.0.get(&p).is_some()));
+        let (in_a, in_b) = (
+            ca.iter().any(|n| n.0.get(&p).is_some()),
+            cb.iter().any(|n| n.0.get(&p).is_some()),
+        );
         if in_a != in_b {
             out.structure.push((p, if in_a { "A" } else { "B" }));
             continue;
         }
-        let mut here: Vec<&'static str> =
-            all.iter().filter_map(|n| n.0.get(&p)).flat_map(|v| v.0.iter().map(|m| m.0)).collect();
+        let mut here: Vec<&'static str> = all
+            .iter()
+            .filter_map(|n| n.0.get(&p))
+            .flat_map(|v| v.0.iter().map(|m| m.0))
+            .collect();
         here.sort();
         here.dedup();
         for &m in here.iter().filter(|m| exact.contains(*m)) {
@@ -108,8 +123,9 @@ pub fn compare(a: &[Run], b: &[Run], aa: Option<&[Run]>, gate: &[&str]) -> Compa
                 out.exact.push((p.clone(), m, va[0], vb[0]));
             }
         }
-        let xs =
-            ["wall", "busy"].into_iter().chain(here.iter().copied().filter(|m| noisy.contains(m)));
+        let xs = ["wall", "busy"]
+            .into_iter()
+            .chain(here.iter().copied().filter(|m| noisy.contains(m)));
         for x in xs {
             let (va, vb) = (series(&ca, &p, x), series(&cb, &p, x));
             let (ma, mb) = (median(&va), median(&vb));
@@ -124,7 +140,15 @@ pub fn compare(a: &[Run], b: &[Run], aa: Option<&[Run]>, gate: &[&str]) -> Compa
                     .collect::<Vec<_>>(),
             );
             let (path, measure, ratio, verdict) = (p.clone(), x, None, "too few rounds");
-            let mut row = Noisy { path, measure, a: ma, b: mb, ratio, verdict, share };
+            let mut row = Noisy {
+                path,
+                measure,
+                a: ma,
+                b: mb,
+                ratio,
+                verdict,
+                share,
+            };
             if va.len().min(vb.len()) >= MIN_ROUNDS {
                 let (r, lo, hi) = ratio_ci(&va, &vb);
                 let w = band(caa.as_deref().map(|aa| (&ca[..], aa)), &p, x);
@@ -148,7 +172,11 @@ fn gate(c: &Comparison) -> String {
     match c.gate.is_empty() {
         true => "passes".into(),
         false => {
-            let g: Vec<String> = c.gate.iter().map(|(p, x)| format!("{} {x}", path(p))).collect();
+            let g: Vec<String> = c
+                .gate
+                .iter()
+                .map(|(p, x)| format!("{} {x}", path(p)))
+                .collect();
             format!("fails on {}", g.join(", "))
         }
     }
@@ -167,18 +195,31 @@ pub fn text(c: &Comparison) -> String {
         "exact measures, A -> B:".into(),
     ];
     for (p, m, x, y) in &c.exact {
-        out.push(format!("  {:<32} {m:<12} {} -> {}", path(p), *x as i64, *y as i64));
+        out.push(format!(
+            "  {:<32} {m:<12} {} -> {}",
+            path(p),
+            *x as i64,
+            *y as i64
+        ));
     }
     if c.exact.is_empty() {
         out.push("  no difference".into());
     }
     for (p, m, side, vs) in &c.nondeterministic {
         let vs: Vec<String> = vs.iter().map(|&v| num(v)).collect();
-        out.push(format!("  {:<32} {m:<12} differs within {side}: {}", path(p), vs.join(" ")));
+        out.push(format!(
+            "  {:<32} {m:<12} differs within {side}: {}",
+            path(p),
+            vs.join(" ")
+        ));
     }
     if !c.structure.is_empty() {
         out.push("structure:".into());
-        out.extend(c.structure.iter().map(|(p, s)| format!("  {:<32} only in {s}", path(p))));
+        out.extend(
+            c.structure
+                .iter()
+                .map(|(p, s)| format!("  {:<32} only in {s}", path(p))),
+        );
     }
     out.push(format!(
         "noisy measures, median over records (ms), B/A with its {}% bootstrap interval:",
@@ -229,9 +270,13 @@ pub fn table(cases: &[(String, Comparison)]) -> String {
         ),
     ];
     for (n, c) in cases {
-        let run = c.noisy.iter().find(|r| r.path.is_empty() && r.measure == "wall");
-        let (a, b, r, verdict) =
-            run.map_or((0.0, 0.0, None, "no run time"), |r| (r.a, r.b, r.ratio, r.verdict));
+        let run = c
+            .noisy
+            .iter()
+            .find(|r| r.path.is_empty() && r.measure == "wall");
+        let (a, b, r, verdict) = run.map_or((0.0, 0.0, None, "no run time"), |r| {
+            (r.a, r.b, r.ratio, r.verdict)
+        });
         out.push(format!(
             "{n:<16} {:>10.3} {:>10.3} {:>7} {:>17} {verdict:<13} {:>5}  {}",
             a / 1e6,

@@ -28,7 +28,11 @@ pub struct Map<K, V> {
 
 impl<K, V> Default for Map<K, V> {
     fn default() -> Self {
-        Map { keys: Vec::new(), vals: Vec::new(), at: HashMap::new() }
+        Map {
+            keys: Vec::new(),
+            vals: Vec::new(),
+            at: HashMap::new(),
+        }
     }
 }
 
@@ -118,16 +122,25 @@ pub fn median_nodes<'a>(
 ) -> (Nodes, Map<Path, Spread>) {
     let (mut nodes, mut spread) = (Nodes::default(), Map::default());
     for p in preorder(trees.clone().flat_map(|n| &n.keys)) {
-        let here: Vec<Values> =
-            trees.clone().map(|n| n.get(&p).cloned().unwrap_or_default()).collect();
+        let here: Vec<Values> = trees
+            .clone()
+            .map(|n| n.get(&p).cloned().unwrap_or_default())
+            .collect();
         let (mut v, mut s) = (Values::default(), Spread::new());
         for &(m, _) in here.iter().flat_map(|v| &v.0) {
             if !v.has(m) {
                 let xs: Vec<f64> = here.iter().map(|v| v.get(m)).collect();
-                let (lo, hi) = xs
-                    .iter()
-                    .fold((f64::INFINITY, f64::NEG_INFINITY), |a, &x| (a.0.min(x), a.1.max(x)));
-                v.set(m, if max.contains(m) { hi } else { crate::stats::median(&xs) });
+                let (lo, hi) = xs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, &x| {
+                    (a.0.min(x), a.1.max(x))
+                });
+                v.set(
+                    m,
+                    if max.contains(m) {
+                        hi
+                    } else {
+                        crate::stats::median(&xs)
+                    },
+                );
                 if !max.contains(m) && lo < hi {
                     s.push((m, (lo, hi)));
                 }
@@ -178,8 +191,15 @@ impl Run {
     /// The record `record` named `file`, a path or any label.
     pub fn new(file: impl Into<String>, record: Record) -> Run {
         let mut memo = vec![None; record.nodes.len()];
-        let paths = (0..record.nodes.len()).map(|i| path(&record, i, &mut memo)).collect();
-        let mut run = Run { file: file.into(), record, nodes: Nodes::default(), paths };
+        let paths = (0..record.nodes.len())
+            .map(|i| path(&record, i, &mut memo))
+            .collect();
+        let mut run = Run {
+            file: file.into(),
+            record,
+            nodes: Nodes::default(),
+            paths,
+        };
         run.nodes = run.tree(run.record.nodes.iter().enumerate());
         run
     }
@@ -191,7 +211,12 @@ impl Run {
             "exact" => exact && !self.record.max.contains(&m),
             _ => !exact,
         };
-        self.record.measures.iter().filter(|m| of(m)).map(|m| m.0).collect()
+        self.record
+            .measures
+            .iter()
+            .filter(|m| of(m))
+            .map(|m| m.0)
+            .collect()
     }
 
     /// The calibration constants `inner` and `outer` in ns, zero where not
@@ -208,7 +233,8 @@ impl Run {
         let mut out = Nodes::default();
         for (i, n) in nodes {
             let v = Values(n.values.iter().map(|&(m, x)| (m, x as f64)).collect());
-            out.entry(self.paths[i].clone(), Values::default).merge(&v, &max);
+            out.entry(self.paths[i].clone(), Values::default)
+                .merge(&v, &max);
         }
         out
     }
@@ -218,14 +244,16 @@ impl Run {
     pub fn per_thread(&self) -> Vec<(&ThreadNodes, Nodes)> {
         let used = |n: &(usize, &Node)| n.1.values.iter().any(|v| v.1 > 0);
         let t = self.record.per_thread.iter();
-        t.map(|t| (t, self.tree(t.nodes.iter().enumerate().filter(used)))).collect()
+        t.map(|t| (t, self.tree(t.nodes.iter().enumerate().filter(used))))
+            .collect()
     }
 
     /// The warnings as (path, level, text, count).
     pub fn warnings(&self) -> Vec<(Path, &'static str, String, u64)> {
         let w = self.record.warnings.iter();
         let at = |n: u32| self.paths.get(n as usize).cloned().unwrap_or_default();
-        w.map(|(e, c)| (at(e.node), e.level.name(), e.kind.to_string(), *c)).collect()
+        w.map(|(e, c)| (at(e.node), e.level.name(), e.kind.to_string(), *c))
+            .collect()
     }
 }
 
@@ -266,7 +294,9 @@ fn intern(s: &str) -> &'static str {
 
 /// The member `k` of `v` read by `f`.
 pub fn get<'a, T>(v: &'a Json, k: &str, f: impl FnOnce(&'a Json) -> Option<T>) -> Result<T> {
-    v.get(k).and_then(f).ok_or_else(|| format!("no valid field '{k}'"))
+    v.get(k)
+        .and_then(f)
+        .ok_or_else(|| format!("no valid field '{k}'"))
 }
 
 fn string(v: &Json, k: &str) -> Result<&'static str> {
@@ -274,18 +304,37 @@ fn string(v: &Json, k: &str) -> Result<&'static str> {
 }
 
 fn id(v: &Json, k: &str) -> Result<Option<u32>> {
-    get(v, k, |x| if *x == Json::Null { Some(None) } else { x.u64().map(|x| Some(x as u32)) })
+    get(v, k, |x| {
+        if *x == Json::Null {
+            Some(None)
+        } else {
+            x.u64().map(|x| Some(x as u32))
+        }
+    })
 }
 
 fn level(v: &Json) -> Result<Level> {
     let name = string(v, "level")?;
-    let all = [Level::ERROR, Level::WARN, Level::INFO, Level::DEBUG, Level::TRACE];
-    all.into_iter().find(|l| l.name() == name).ok_or_else(|| format!("level {name}"))
+    let all = [
+        Level::ERROR,
+        Level::WARN,
+        Level::INFO,
+        Level::DEBUG,
+        Level::TRACE,
+    ];
+    all.into_iter()
+        .find(|l| l.name() == name)
+        .ok_or_else(|| format!("level {name}"))
 }
 
 fn values(v: &Json) -> Result<Vec<(&'static str, u64)>> {
     let m = get(v, "values", Json::members)?.iter();
-    m.map(|(m, x)| x.u64().map(|x| (intern(m), x)).ok_or_else(|| format!("value of {m}"))).collect()
+    m.map(|(m, x)| {
+        x.u64()
+            .map(|x| (intern(m), x))
+            .ok_or_else(|| format!("value of {m}"))
+    })
+    .collect()
 }
 
 /// A record from its JSON (schema 1 or 2). Names are interned and sites
@@ -324,7 +373,13 @@ pub fn parse(text: &str) -> Result<Record> {
     let sites = get(&doc, "sites", Json::arr)?.iter().map(|v| {
         let file = v.get("file").map_or(Ok(""), |_| string(v, "file"))?;
         let line = v.get("line").and_then(Json::u64).unwrap_or(0) as u32;
-        let site = Site::new(string(v, "name")?, string(v, "module")?, file, line, level(v)?);
+        let site = Site::new(
+            string(v, "name")?,
+            string(v, "module")?,
+            file,
+            line,
+            level(v)?,
+        );
         Ok((int(v, "id")? as u32, &*Box::leak(Box::new(site))))
     });
     let sites: Vec<(u32, &'static Site)> = sites.collect::<Result<_>>()?;
@@ -332,36 +387,74 @@ pub fn parse(text: &str) -> Result<Record> {
     for (i, v) in get(&doc, "nodes", Json::arr)?.iter().enumerate() {
         let (parent, site) = (id(v, "parent")?, id(v, "site")?);
         if int(v, "id")? != i as u64 || !site.is_none_or(|s| sites.iter().any(|x| x.0 == s)) {
-            return Err(format!("node {i}: ids not 0..n in order, or an unknown site"));
+            return Err(format!(
+                "node {i}: ids not 0..n in order, or an unknown site"
+            ));
         }
-        nodes.push(Node { parent, site, values: values(v)? });
+        nodes.push(Node {
+            parent,
+            site,
+            values: values(v)?,
+        });
     }
-    if nodes.is_empty() || nodes.iter().any(|n| n.parent.is_some_and(|p| p as usize >= nodes.len()))
+    if nodes.is_empty()
+        || nodes
+            .iter()
+            .any(|n| n.parent.is_some_and(|p| p as usize >= nodes.len()))
     {
         return Err("no root, or a node with an unknown parent".into());
     }
     let list = |k| doc.get(k).map_or(Ok(&[][..]), |_| get(&doc, k, Json::arr));
     let per_thread = list("per_thread")?.iter().map(|t| {
-        let mut ns: Vec<Node> =
-            nodes.iter().map(|n| Node { values: Vec::new(), ..n.clone() }).collect();
+        let mut ns: Vec<Node> = nodes
+            .iter()
+            .map(|n| Node {
+                values: Vec::new(),
+                ..n.clone()
+            })
+            .collect();
         for n in get(t, "nodes", Json::arr)? {
-            ns.get_mut(int(n, "id")? as usize).ok_or("a thread's node id")?.values = values(n)?;
+            ns.get_mut(int(n, "id")? as usize)
+                .ok_or("a thread's node id")?
+                .values = values(n)?;
         }
         let handle = get(t, "handle", Some)? == &Json::Bool(true);
-        Ok(ThreadNodes { index: int(t, "index")? as u32, handle, nodes: ns })
+        Ok(ThreadNodes {
+            index: int(t, "index")? as u32,
+            handle,
+            nodes: ns,
+        })
     });
     let warnings = list("warnings")?.iter().map(|w| {
         let node = Some(int(w, "node")? as u32)
             .filter(|&n| (n as usize) < nodes.len())
             .ok_or("a warning's node")?;
-        let (module, file, line, time) =
-            (string(w, "module")?, string(w, "file")?, int(w, "line")? as u32, int(w, "time")?);
+        let (module, file, line, time) = (
+            string(w, "module")?,
+            string(w, "file")?,
+            int(w, "line")? as u32,
+            int(w, "time")?,
+        );
         let kind = Kind::Message(get(w, "text", Json::str)?.into());
-        Ok((Event { node, level: level(w)?, module, file, line, time, kind }, int(w, "count")?))
+        Ok((
+            Event {
+                node,
+                level: level(w)?,
+                module,
+                file,
+                line,
+                time,
+                kind,
+            },
+            int(w, "count")?,
+        ))
     });
     Ok(Record {
         params: params.collect::<Result<_>>()?,
-        calibration: Calibration { inner_ns: ns("inner_ns")?, outer_ns: ns("outer_ns")? },
+        calibration: Calibration {
+            inner_ns: ns("inner_ns")?,
+            outer_ns: ns("outer_ns")?,
+        },
         threads: int(&doc, "threads")? as u32,
         measures,
         max,
@@ -390,14 +483,19 @@ pub fn load_set<A: AsRef<std::path::Path>>(args: &[A]) -> Result<Vec<Run>> {
             continue;
         }
         let dir = std::fs::read_dir(a).map_err(|e| format!("{}: {e}", a.display()))?;
-        let mut names: Vec<String> =
-            dir.flatten().map(|e| e.file_name().to_string_lossy().into()).collect();
+        let mut names: Vec<String> = dir
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into())
+            .collect();
         names.retain(|n| n.ends_with(".json"));
         names.sort();
         files.extend(names.iter().map(|n| a.join(n)));
     }
     if files.is_empty() {
-        let args: Vec<_> = args.iter().map(|a| a.as_ref().display().to_string()).collect();
+        let args: Vec<_> = args
+            .iter()
+            .map(|a| a.as_ref().display().to_string())
+            .collect();
         return Err(format!("no records in {}", args.join(" ")));
     }
     let run = |f: &std::path::PathBuf| Ok(Run::new(f.display().to_string(), load(f)?));

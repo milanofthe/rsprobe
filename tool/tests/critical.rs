@@ -26,8 +26,11 @@ fn spans() -> Vec<Span> {
         let parent = parent.map_or("null".into(), |p| p.to_string());
         format!(r#"{{"pid":1,"tid":{t},"ph":"X","name":"{n}","ts":{ts},"dur":{d},"args":{{"node":{node},"parent":{parent}}}}}"#)
     }));
-    critical::parse(&format!(r#"{{"displayTimeUnit":"ns","traceEvents":[{}]}}"#, events.join(",")))
-        .unwrap()
+    critical::parse(&format!(
+        r#"{{"displayTimeUnit":"ns","traceEvents":[{}]}}"#,
+        events.join(",")
+    ))
+    .unwrap()
 }
 
 /// (last name or none for a gap, thread, start and duration in us) per row
@@ -35,7 +38,12 @@ fn spans() -> Vec<Span> {
 fn rows(c: &critical::Critical, level: usize) -> Vec<(Option<&str>, Option<u64>, i64, i64)> {
     let rows = c.rows.iter().filter(|r| r.level == level);
     rows.map(|r| {
-        (r.path.as_ref().map(|p| p[p.len() - 1].as_str()), r.tid, r.start / 1000, r.dur / 1000)
+        (
+            r.path.as_ref().map(|p| p[p.len() - 1].as_str()),
+            r.tid,
+            r.start / 1000,
+            r.dur / 1000,
+        )
     })
     .collect()
 }
@@ -56,14 +64,23 @@ fn chain_follows_the_long_worker() {
     ];
     assert_eq!(rows(c, 1), expected);
     assert!((c.rows[3].share - 0.48).abs() < 1e-12);
-    assert_eq!(totals(c), [("phase/task".to_string(), 83000), ("phase".to_string(), 17000)]);
+    assert_eq!(
+        totals(c),
+        [
+            ("phase/task".to_string(), 83000),
+            ("phase".to_string(), 17000)
+        ]
+    );
 }
 
 #[test]
 fn depth_follows_into_the_elements() {
     let c = &critical(&spans(), Some("phase"), 2).unwrap()[0];
     let inner: Vec<_> = rows(c, 2).into_iter().map(|r| (r.0, r.2, r.3)).collect();
-    assert_eq!(inner, [(None, 42, 8), (Some("kernel"), 50, 30), (None, 80, 10)]);
+    assert_eq!(
+        inner,
+        [(None, 42, 8), (Some("kernel"), 50, 30), (None, 80, 10)]
+    );
     let t = totals(c);
     let at = |p: &str| t.iter().find(|x| x.0 == p).unwrap().1;
     assert_eq!((at("phase/task/kernel"), at("phase/task")), (30000, 53000));
@@ -72,10 +89,15 @@ fn depth_follows_into_the_elements() {
 
 #[test]
 fn default_is_each_top_level_scope() {
-    let got: Vec<String> =
-        critical(&spans(), None, 2).unwrap().iter().map(|c| name(&c.path)).collect();
+    let got: Vec<String> = critical(&spans(), None, 2)
+        .unwrap()
+        .iter()
+        .map(|c| name(&c.path))
+        .collect();
     assert_eq!(got, ["phase", "after"]);
-    assert!(critical::text(&spans(), Some("phase"), 2).unwrap().contains("phase/task"));
+    assert!(critical::text(&spans(), Some("phase"), 2)
+        .unwrap()
+        .contains("phase/task"));
     assert!(critical(&spans(), Some("phase/none"), 2).is_err());
 }
 

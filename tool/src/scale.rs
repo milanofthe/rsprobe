@@ -28,7 +28,10 @@ pub fn points(runs: &[Run], by: &str) -> Result<Vec<(f64, Nodes)>> {
         }
     }
     groups.sort_by(|a, b| a.0.total_cmp(&b.0));
-    Ok(groups.into_iter().map(|(x, recs)| (x, median_nodes(recs.iter(), &Set::new()).0)).collect())
+    Ok(groups
+        .into_iter()
+        .map(|(x, recs)| (x, median_nodes(recs.iter(), &Set::new()).0))
+        .collect())
 }
 
 /// (measure, c, p, q, residual) of the fit of c n^p log^q(n) to each of the
@@ -69,7 +72,10 @@ pub fn fits(runs: &[Run], by: &str) -> Result<Fits> {
     let pts = points(runs, by)?;
     let n: Vec<f64> = pts.iter().map(|p| p.0).collect();
     if n.len() < MIN_FIT_POINTS {
-        return Err(format!("{} values of {by}; a fit needs at least {MIN_FIT_POINTS}", n.len()));
+        return Err(format!(
+            "{} values of {by}; a fit needs at least {MIN_FIT_POINTS}",
+            n.len()
+        ));
     }
     let mut exact = union(runs, |r| r.kind("exact"));
     exact.remove("calls");
@@ -85,14 +91,20 @@ pub fn fits(runs: &[Run], by: &str) -> Result<Fits> {
         for (m, c, e, q, res) in node_fits(&n, &vs, &ms) {
             rows.push((p.clone(), m, c, e, q, res));
             if m == time {
-                local.push((p.clone(), local_exponent(e, q, n[n.len() - 1]), last.get("self")));
+                local.push((
+                    p.clone(),
+                    local_exponent(e, q, n[n.len() - 1]),
+                    last.get("self"),
+                ));
             }
         }
     }
-    let dominant = local.iter().fold(None::<&(Path, f64, f64)>, |b, l| match b {
-        Some(b) if b.2 >= l.2 => Some(b),
-        _ => Some(l),
-    });
+    let dominant = local
+        .iter()
+        .fold(None::<&(Path, f64, f64)>, |b, l| match b {
+            Some(b) if b.2 >= l.2 => Some(b),
+            _ => Some(l),
+        });
     let run = dominant.map(|d| d.1);
     let departs = local
         .iter()
@@ -126,15 +138,21 @@ pub fn by_measure(runs: &[Run], unit: &str) -> ByMeasure {
     other.retain(|m| !["wall", "busy", "calls", unit].contains(m));
     let mut out = ByMeasure::default();
     for p in preorder(recs.iter().flat_map(|n| &n.keys)) {
-        let mut vs: Vec<&Values> =
-            recs.iter().filter_map(|n| n.get(&p)).filter(|v| v.get(unit) > 0.0).collect();
+        let mut vs: Vec<&Values> = recs
+            .iter()
+            .filter_map(|n| n.get(&p))
+            .filter(|v| v.get(unit) > 0.0)
+            .collect();
         vs.sort_by(|a, b| a.get(unit).total_cmp(&b.get(unit)));
         let x: Vec<f64> = vs.iter().map(|v| v.get(unit)).collect();
         let mut distinct = x.clone();
         distinct.dedup();
         if distinct.len() < MIN_FIT_POINTS {
-            let why =
-                if x.is_empty() { "absent".into() } else { format!("{} values", distinct.len()) };
+            let why = if x.is_empty() {
+                "absent".into()
+            } else {
+                format!("{} values", distinct.len())
+            };
             out.skipped.push((p, why));
             continue;
         }
@@ -179,19 +197,37 @@ pub fn threads(runs: &[Run], by: &str) -> Result<Threads> {
             continue;
         }
         for (t, nodes) in &pts[1..] {
-            let Some(v) = nodes.get(&p).filter(|v| !v.0.is_empty() && v.get("wall") > 0.0) else {
+            let Some(v) = nodes
+                .get(&p)
+                .filter(|v| !v.0.is_empty() && v.get("wall") > 0.0)
+            else {
                 continue;
             };
             let s = b.get("wall") / v.get("wall");
             let wait = (v.get("busy") > 0.0).then(|| 1.0 - v.get("busy") / (t * v.get("wall")));
-            rows.push((p.clone(), *t, v.get("wall"), s, s * t0 / t, karp_flatt(s, t / t0), wait));
+            rows.push((
+                p.clone(),
+                *t,
+                v.get("wall"),
+                s,
+                s * t0 / t,
+                karp_flatt(s, t / t0),
+                wait,
+            ));
         }
     }
     Ok(Threads { t0: *t0, rows })
 }
 
 fn model(p: f64, q: i32, x: &str) -> String {
-    format!("{x}^{p:.2}{}", if q != 0 { format!(" log {x}") } else { String::new() })
+    format!(
+        "{x}^{p:.2}{}",
+        if q != 0 {
+            format!(" log {x}")
+        } else {
+            String::new()
+        }
+    )
 }
 
 /// The fits over a parameter as text.
@@ -215,8 +251,11 @@ pub fn text(runs: &[Run], by: &str) -> Result<String> {
             model(*e, *q, "n")
         ));
     }
-    let departs: Vec<String> =
-        f.departs.iter().map(|(p, e)| format!("{} ({e:.2})", path(p))).collect();
+    let departs: Vec<String> = f
+        .departs
+        .iter()
+        .map(|(p, e)| format!("{} ({e:.2})", path(p)))
+        .collect();
     out.push(format!(
         "dominant: {}, local exponent {:.2} at {by} = {} (largest self time); departing by more than {}: {}",
         path(&f.dominant.unwrap_or_default()),
@@ -283,7 +322,12 @@ pub fn text_measure(runs: &[Run], unit: &str) -> String {
             v.join(", ")
         }
     };
-    let absent = f.skipped.iter().filter(|s| s.1 == "absent").map(|s| path(&s.0)).collect();
+    let absent = f
+        .skipped
+        .iter()
+        .filter(|s| s.1 == "absent")
+        .map(|s| path(&s.0))
+        .collect();
     let few = f
         .skipped
         .iter()
@@ -295,7 +339,11 @@ pub fn text_measure(runs: &[Run], unit: &str) -> String {
         list(absent),
         list(few)
     ));
-    let poor = f.poor.iter().map(|(p, r)| format!("{} ({r:.3})", path(p))).collect();
+    let poor = f
+        .poor
+        .iter()
+        .map(|(p, r)| format!("{} ({r:.3})", path(p)))
+        .collect();
     out.push(format!(
         "time not following {unit}, residual above {}: {}",
         g(FOLLOWS, 6),

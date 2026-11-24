@@ -54,7 +54,11 @@ pub fn corrected(run: &Run) -> Corrected {
     for (i, o) in out.vals.iter_mut().enumerate() {
         let v = &nodes.vals[i];
         for x in ["wall", "busy"] {
-            let own = if d[i] == x { v.get("calls") * inner } else { 0.0 };
+            let own = if d[i] == x {
+                v.get("calls") * inner
+            } else {
+                0.0
+            };
             let c = match v.get(x) {
                 0.0 => 0.0,
                 t => t - own - below(&kids, &d, nodes, i, x) * full,
@@ -87,7 +91,12 @@ pub fn corrected(run: &Run) -> Corrected {
     let (wall, busy) = totals(&out);
     let (rw, rb) = totals(nodes);
     let cost = sum(nodes.vals.iter().map(|v| v.get("calls"))) * full;
-    let run = Values(vec![("wall", wall), ("busy", busy), ("raw", rw + rb), ("cost", cost)]);
+    let run = Values(vec![
+        ("wall", wall),
+        ("busy", busy),
+        ("raw", rw + rb),
+        ("cost", cost),
+    ]);
     (out, run)
 }
 

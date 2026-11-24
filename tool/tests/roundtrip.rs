@@ -24,10 +24,13 @@ fn workload() -> &'static Path {
             .unwrap();
         assert!(out.status.success());
         let messages = String::from_utf8(out.stdout).unwrap();
-        let exe = messages.lines().filter_map(|l| Json::parse(l).ok()).find_map(|m| {
-            let name = m.get("target")?.get("name")?.str()?;
-            (name == "workload").then(|| m.get("executable")?.str().map(PathBuf::from))?
-        });
+        let exe = messages
+            .lines()
+            .filter_map(|l| Json::parse(l).ok())
+            .find_map(|m| {
+                let name = m.get("target")?.get("name")?.str()?;
+                (name == "workload").then(|| m.get("executable")?.str().map(PathBuf::from))?
+            });
         exe.expect("cargo reports the example's executable")
     })
 }
@@ -56,8 +59,14 @@ fn set(n: u32, t: u32, k: u32) -> String {
 
 /// The binary on the arguments: exit code and stdout.
 fn tool(args: &[&str]) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_rsprobe")).args(args).output().unwrap();
-    (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap())
+    let out = Command::new(env!("CARGO_BIN_EXE_rsprobe"))
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap(),
+        String::from_utf8(out.stdout).unwrap(),
+    )
 }
 
 #[test]
@@ -67,13 +76,27 @@ fn report_of_the_workload() {
     let paths: Vec<String> = rows.iter().map(|r| path(&r.path)).collect();
     assert_eq!(
         paths,
-        ["(run)", "assemble", "sort", "solve", "solve/iteration", "pairs", "pairs/task"]
+        [
+            "(run)",
+            "assemble",
+            "sort",
+            "solve",
+            "solve/iteration",
+            "pairs",
+            "pairs/task"
+        ]
     );
     let at = |p: &str| &rows[paths.iter().position(|x| x == p).unwrap()];
     assert_eq!(at("solve/iteration").v.get("calls"), 15.0);
-    assert_eq!(at("assemble").measures().copied().collect::<Vec<_>>(), [("nonzeros", 3000.0)]);
+    assert_eq!(
+        at("assemble").measures().copied().collect::<Vec<_>>(),
+        [("nonzeros", 3000.0)]
+    );
     assert_eq!(at("pairs/task").domain, "busy");
-    assert!(at("pairs").ratios.iter().any(|(k, x)| k == "busy/wall" && *x > 0.0));
+    assert!(at("pairs")
+        .ratios
+        .iter()
+        .any(|(k, x)| k == "busy/wall" && *x > 0.0));
     assert!(run.get("wall") > 0.0);
     let (code, out) = tool(&["report", &dir]);
     assert!(code == 0 && out.contains("ns/iterations"));
@@ -83,8 +106,17 @@ fn report_of_the_workload() {
 #[test]
 fn compare_of_two_sizes() {
     let (a, b) = (set(1000, 2, 3), set(1500, 2, 3));
-    let c = compare(&load_set(&[&a]).unwrap(), &load_set(&[&b]).unwrap(), None, &GATE);
-    let exact: Vec<_> = c.exact.iter().map(|(p, m, x, y)| (path(p), *m, *x, *y)).collect();
+    let c = compare(
+        &load_set(&[&a]).unwrap(),
+        &load_set(&[&b]).unwrap(),
+        None,
+        &GATE,
+    );
+    let exact: Vec<_> = c
+        .exact
+        .iter()
+        .map(|(p, m, x, y)| (path(p), *m, *x, *y))
+        .collect();
     let expected = [
         ("assemble".to_string(), "nonzeros", 1000.0, 1500.0),
         ("pairs/task".to_string(), "differences", 1e6, 2.25e6),
@@ -93,7 +125,10 @@ fn compare_of_two_sizes() {
     assert!(c.nondeterministic.is_empty() && c.structure.is_empty());
     // the caller's wait, a time the program adds: compared with an interval,
     // never as an exact difference
-    assert!(c.noisy.iter().any(|n| path(&n.path) == "pairs" && n.measure == "join"));
+    assert!(c
+        .noisy
+        .iter()
+        .any(|n| path(&n.path) == "pairs" && n.measure == "join"));
     let (code, out) = tool(&["compare", &a, &b]);
     assert!(code == 0 || code == 1);
     assert!(out.contains("nonzeros     1000 -> 1500"));
@@ -104,8 +139,13 @@ fn scale_over_size_and_threads() {
     let sizes: Vec<String> = [500, 1000, 1500].map(|n| set(n, 2, 3)).to_vec();
     let f = scale::fits(&load_set(&sizes).unwrap(), "n").unwrap();
     assert_eq!(f.n, [500.0, 1000.0, 1500.0]);
-    let exponent =
-        |p: &str, m: &str| f.rows.iter().find(|r| path(&r.0) == p && r.1 == m).unwrap().3;
+    let exponent = |p: &str, m: &str| {
+        f.rows
+            .iter()
+            .find(|r| path(&r.0) == p && r.1 == m)
+            .unwrap()
+            .3
+    };
     assert!((exponent("pairs/task", "differences") - 2.0).abs() < 1e-9);
     assert!((exponent("assemble", "nonzeros") - 1.0).abs() < 1e-9);
     let mut args = vec!["scale", "--by", "n"];
@@ -138,15 +178,30 @@ fn critical_path_of_the_pairs() {
         .collect();
     // the chain's tasks follow one another, on workers: the one ending last
     // where the tasks ran concurrently, more where a task started late
-    assert!(!tasks.is_empty() && tasks.windows(2).all(|w| w[0].start + w[0].dur <= w[1].start));
+    assert!(
+        !tasks.is_empty()
+            && tasks
+                .windows(2)
+                .all(|w| w[0].start + w[0].dur <= w[1].start)
+    );
     assert!(tasks.iter().all(|t| t.tid != Some(0)));
     let elapsed = c.instance.end - c.instance.start;
-    assert_eq!(c.rows.iter().filter(|r| r.level == 1).map(|r| r.dur).sum::<i64>(), elapsed);
+    assert_eq!(
+        c.rows
+            .iter()
+            .filter(|r| r.level == 1)
+            .map(|r| r.dur)
+            .sum::<i64>(),
+        elapsed
+    );
     assert_eq!(c.totals.iter().map(|t| t.1).sum::<i64>(), elapsed);
     let (code, out) = tool(&["critical", trace]);
     assert_eq!(code, 0);
-    let heads: Vec<&str> =
-        out.lines().filter(|l| !l.starts_with(' ')).map(|l| l.split(':').next().unwrap()).collect();
+    let heads: Vec<&str> = out
+        .lines()
+        .filter(|l| !l.starts_with(' '))
+        .map(|l| l.split(':').next().unwrap())
+        .collect();
     assert_eq!(heads, ["assemble", "sort", "solve", "pairs"]);
 }
 
@@ -181,18 +236,30 @@ fn ab_of_two_thread_counts() {
 fn threads_and_max() {
     let dir = set(1000, 3, 3);
     let runs = load_set(&[&dir]).unwrap();
-    assert_eq!(runs[0].kind("max").into_iter().collect::<Vec<_>>(), ["chunk"]);
+    assert_eq!(
+        runs[0].kind("max").into_iter().collect::<Vec<_>>(),
+        ["chunk"]
+    );
     let ts = runs[0].per_thread();
-    assert_eq!(ts.iter().map(|t| t.0.handle).collect::<Vec<_>>(), [false, true, true, true]);
+    assert_eq!(
+        ts.iter().map(|t| t.0.handle).collect::<Vec<_>>(),
+        [false, true, true, true]
+    );
     let task = vec![("pairs", "workload"), ("task", "workload")];
-    let mut d: Vec<f64> =
-        ts[1..].iter().map(|t| t.1.get(&task).unwrap().get("differences")).collect();
+    let mut d: Vec<f64> = ts[1..]
+        .iter()
+        .map(|t| t.1.get(&task).unwrap().get("differences"))
+        .collect();
     d.sort_by(f64::total_cmp);
     assert_eq!(d, [332000.0, 334000.0, 334000.0]);
     let (code, out) = tool(&["report", "--threads", "pairs/task", &dir]);
     assert_eq!((code, out.matches(" handle ").count()), (0, 9));
     let (_, out) = tool(&["report", &dir]);
-    for part in ["3 records, median over records.", "chunk max 334", "differences=1000000,"] {
+    for part in [
+        "3 records, median over records.",
+        "chunk max 334",
+        "differences=1000000,",
+    ] {
         assert!(out.contains(part), "{part}");
     }
 }
