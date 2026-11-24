@@ -14,7 +14,8 @@ use std::sync::Arc;
 /// [`Handle::enter`]: makes a node current on this thread and restores the
 /// previous one on drop, adding its span to `wall` (on a thread entered
 /// through the context) or `busy` (through a handle) of that node, and for a
-/// scope one call.
+/// scope one call. The time this thread spent emitting events meanwhile is
+/// not part of the span added; it is the measure `emit` of the event's node.
 #[must_use]
 pub struct Guard {
     /// Id of the context of `prev`, which for a scope is its own.
@@ -22,6 +23,8 @@ pub struct Guard {
     cur: Cur,
     prev: Cur,
     start: u64,
+    /// [`Entry::out`] at entry.
+    out: u64,
     /// This thread's allocation counters at entry, from [`open`].
     mem: [u64; N],
     kind: Kind,
@@ -46,6 +49,7 @@ impl Guard {
         cur: IDLE,
         prev: IDLE,
         start: 0,
+        out: 0,
         mem: [0; N],
         kind: Kind::Enter,
         _thread: PhantomData,
@@ -92,6 +96,7 @@ impl Thread {
             cur: self.cur,
             prev,
             start,
+            out: e.out,
             ..Guard::IDLE
         }
     }
@@ -116,6 +121,7 @@ impl Site {
                 cur: *cur,
                 prev,
                 start: (e.clock)(),
+                out: e.out,
                 mem: open(),
                 kind: Kind::Scope,
                 ..Guard::IDLE
@@ -148,7 +154,10 @@ impl Drop for Guard {
                 *cur = self.prev;
                 return None;
             }
-            let dt = (e.clock)().saturating_sub(self.start);
+            // The span as the clock gives it, and without the time this
+            // thread spent emitting events meanwhile.
+            let span_ns = (e.clock)().saturating_sub(self.start);
+            let dt = span_ns.saturating_sub(e.out - self.out);
             let b = e.base(self.cur.node);
             bump(&b[CALLS], (self.kind == Kind::Scope) as u64);
             bump(&b[if self.cur.busy { BUSY } else { WALL }], dt);
@@ -157,7 +166,7 @@ impl Drop for Guard {
                 op(&b[BYTES + k], m);
             }
             if e.stream {
-                span(e, self.cur.node, self.start, dt);
+                span(e, self.cur.node, self.start, span_ns);
             }
             *cur = self.prev;
             if self.kind == Kind::Scope {
