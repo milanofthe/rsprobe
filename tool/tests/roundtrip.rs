@@ -92,11 +92,14 @@ fn report_of_the_workload() {
         at("assemble").measures().copied().collect::<Vec<_>>(),
         [("nonzeros", 3000.0)]
     );
-    assert_eq!(at("pairs/task").domain, "busy");
+    let (pairs, task) = (&at("pairs").v, &at("pairs/task").v);
+    // summed over 3 records of 2 tasks each, all on workers
+    assert_eq!((pairs.get("busy"), pairs.get("tasks")), (0.0, 6.0));
+    assert_eq!((task.get("wall"), task.get("worker_calls")), (0.0, 6.0));
     assert!(at("pairs")
         .ratios
         .iter()
-        .any(|(k, x)| k == "busy/wall" && *x > 0.0));
+        .any(|(k, x)| k == "pool/wall" && *x > 0.0));
     assert!(run.get("wall") > 0.0);
     let (code, out) = tool(&["report", &dir]);
     assert!(code == 0 && out.contains("ns/iterations"));

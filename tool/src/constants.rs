@@ -45,10 +45,10 @@ pub const LOG_POWERS: [i32; 2] = [0, 1];
 pub const DEPARTURE: f64 = 0.1;
 
 /// Measures that fail the gate of compare and ab unless --gate adds others:
-/// wall is the elapsed time a user waits for. busy also grows where a worker
-/// waits (a task parked until a decision) without anything running slower,
-/// and a time! measure is the program's own reading; both get a verdict
-/// only.
+/// wall is the elapsed time a user waits for. busy and pool also grow where
+/// a worker waits (a task parked until a decision) without anything running
+/// slower, and a time! measure is the program's own reading; they get a
+/// verdict only.
 pub const GATE: [&str; 1] = ["wall"];
 
 /// Seed of the arm order of ab, so that the same rounds run in the same
@@ -64,6 +64,7 @@ pub const CRITICAL_DEPTH: usize = 2;
 /// an rms of about 0.1; 0.25 is two and a half times that, a factor of 1.28.
 pub const FOLLOWS: f64 = 0.25;
 
-/// Versions of the record's JSON layout this tool reads: 2 adds the measure
-/// kind `max`.
-pub const SCHEMAS: [u64; 2] = [1, 2];
+/// Versions of the record's JSON layout this tool reads, the current last: 2
+/// adds the measure kind `max`, 3 splits the time and the calls of a node by
+/// kind of thread.
+pub const SCHEMAS: [u64; 2] = [2, 3];

@@ -65,7 +65,7 @@ fn known_exponents() {
         ("nlogn", 10.0, 1.0, 1),
         ("quad", 0.1, 2.0, 0),
     ] {
-        let got = fit(&runs, node, "wall");
+        let got = fit(&runs, node, "time");
         assert_eq!(got.2, q, "{node}");
         assert!(
             close(got.1, e, 1e-3) && close(got.0 / c, 1.0, 1e-2) && got.3 < 1e-3,
@@ -78,7 +78,7 @@ fn known_exponents() {
 
 #[test]
 fn noisy_exponents() {
-    let (_, e, q, res) = fit(&series(0.02, &SIZES), "quad", "wall");
+    let (_, e, q, res) = fit(&series(0.02, &SIZES), "quad", "time");
     assert!(close(local_exponent(e, q, SIZES[4] as f64), 2.0, 0.05));
     assert!(res > 0.0);
 }
@@ -112,7 +112,7 @@ fn missing_parameter() {
 
 #[test]
 fn known_serial_fraction() {
-    // T(t) = T1 (f + (1 - f) / t) with f = 0.1; busy t (T(t) - f T1) makes
+    // T(t) = T1 (f + (1 - f) / t) with f = 0.1; pool t (T(t) - f T1) makes
     // the waiting share 1 - (T - f T1) / T.
     let (t1, f) = (1e9, 0.1);
     let wall = |t: f64| t1 * (f + (1.0 - f) / t);
@@ -131,7 +131,7 @@ fn known_serial_fraction() {
                 &format!("{t}.json"),
                 &[
                     (&[], &[("wall", w)]),
-                    (&["par"], &[("calls", 1), ("wall", w), ("busy", b)]),
+                    (&["par"], &[("calls", 1), ("wall", w), ("pool", b)]),
                 ],
             )
         })
@@ -186,7 +186,7 @@ fn time_against_the_nodes_own_measure() {
     let (_, _, k, _, e, q, res) = r
         .rows
         .iter()
-        .find(|r| path(&r.0) == "factor" && r.1 == "wall")
+        .find(|r| path(&r.0) == "factor" && r.1 == "time")
         .unwrap();
     assert_eq!(*k, 12);
     assert!((e + *q as f64 / 1e5f64.ln() - 1.0).abs() < 0.05);

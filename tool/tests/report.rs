@@ -31,7 +31,7 @@ fn near(a: f64, b: f64) {
 }
 
 // inner 10 ns, outer 5 ns, so full 15 ns. A serial solve with iterations
-// and a parallel section whose four tasks ran on workers.
+// and a section `par` on the calling thread whose four tasks ran on workers.
 const NODES: common::Tree = &[
     (&[], &[("wall", 10000)]),
     (&["solve"], &[("calls", 2), ("wall", 8000)]),
@@ -41,11 +41,22 @@ const NODES: common::Tree = &[
     ),
     (
         &["par"],
-        &[("calls", 1), ("wall", 1000), ("busy", 3600), ("wait", 198)],
+        &[
+            ("calls", 1),
+            ("wall", 1000),
+            ("pool", 3600),
+            ("tasks", 4),
+            ("wait", 198),
+        ],
     ),
     (
         &["par", "task"],
-        &[("calls", 4), ("busy", 3500), ("nnz", 700)],
+        &[
+            ("calls", 4),
+            ("worker_calls", 4),
+            ("busy", 3500),
+            ("nnz", 700),
+        ],
     ),
 ];
 
@@ -64,20 +75,21 @@ fn nodes() -> Vec<Run> {
 
 #[test]
 fn correction_and_shares() {
-    // By hand, X' = X - calls inner [own domain] - (instances below) full:
-    // it:    5000 - 10*10            = 4900, self 4900
-    // solve: 8000 - 2*10 - 10*15     = 7830, self 7830 - 4900 = 2930
-    // task:  busy 3500 - 4*10        = 3460, self 3460
-    // par:   wall 1000 - 1*10        = 990 (task is on workers), self 990
-    //        busy 3600 - 4*15        = 3540
-    // run:   10000 - (2+10+1)*15     = 9805, self 9805 - 7830 - 990 = 985
-    // run busy = busy of par = 3540; cost 17*15 = 255 of 10000 + 3600.
+    // By hand, with c = calls - worker_calls:
+    // it:    wall 5000 - 10*10         = 4900, self 4900
+    // solve: wall 8000 - 2*10 - 10*15  = 7830, self 7830 - 4900 = 2930
+    // task:  busy 3500 - 4*10          = 3460, self 3460
+    // par:   wall 1000 - 1*10          = 990 (task on workers), self 990
+    //        pool 3600 - 4*15          = 3540 (task under its handles)
+    // run:   wall 10000 - (2+10+1)*15  = 9805, self 9805 - 7830 - 990 = 985
+    // thread time 9805 + 3540 = 13345; cost 17*15 = 255 of 10000 + 3600.
+    let t = 13345.0;
     let expected: [(&[&str], [f64; 4]); 5] = [
-        (&[], [9805.0, 0.0, 985.0, 1.0]),
-        (&["solve"], [7830.0, 0.0, 2930.0, 7830.0 / 9805.0]),
-        (&["solve", "it"], [4900.0, 0.0, 4900.0, 4900.0 / 9805.0]),
-        (&["par"], [990.0, 3540.0, 990.0, 990.0 / 9805.0]),
-        (&["par", "task"], [0.0, 3460.0, 3460.0, 3460.0 / 3540.0]),
+        (&[], [9805.0, 0.0, 985.0, 9805.0 / t]),
+        (&["solve"], [7830.0, 0.0, 2930.0, 7830.0 / t]),
+        (&["solve", "it"], [4900.0, 0.0, 4900.0, 4900.0 / t]),
+        (&["par"], [990.0, 0.0, 990.0, 990.0 / t]),
+        (&["par", "task"], [0.0, 3460.0, 3460.0, 3460.0 / t]),
     ];
     let (rows, run) = report::rows(&nodes(), &[], true);
     for (p, [wall, busy, own, share]) in expected {
@@ -89,7 +101,11 @@ fn correction_and_shares() {
         );
         near(r.share, share);
     }
-    assert_eq!((run.get("wall"), run.get("busy")), (9805.0, 3540.0));
+    assert_eq!(row(&rows, &["par"]).v.get("pool"), 3540.0);
+    assert_eq!(
+        [run.get("wall"), run.get("pool"), run.get("thread")],
+        [9805.0, 3540.0, t]
+    );
     near(run.get("cost") / run.get("raw"), 255.0 / 13600.0);
     // Scope cost of it: 100 of 5000.
     near(row(&rows, &["solve", "it"]).cost_share, 0.02);
@@ -112,9 +128,12 @@ fn ratios_per_unit_and_share() {
     // a noisy measure is a time: its share of the node's, not per unit
     assert_eq!(
         ratios(row(&rows, &["par"])),
-        [("wait/wall", 198.0 / 990.0), ("busy/wall", 3540.0 / 990.0)]
+        [("wait/time", 198.0 / 990.0), ("pool/wall", 3540.0 / 990.0)]
     );
-    assert!(line(&report::text(&runs, &[], false), "  par").contains("wait 0.000 ms"));
+    let text = report::text(&runs, &[], false);
+    assert!(line(&text, "  par").contains("wait 0.000 ms"));
+    assert!(line(&text, "node").contains("wall ms    busy ms    pool ms"));
+    assert!(line(&text, "run:").contains("thread time 0.013 ms"));
 }
 
 #[test]
@@ -124,7 +143,7 @@ fn records_are_summed() {
     assert_eq!(run.get("wall"), 3.0 * 9805.0);
     assert_eq!(rows[2].v.get("calls"), 30.0);
     near(rows[2].v.get("self"), 3.0 * 4900.0);
-    near(rows[2].share, 4900.0 / 9805.0);
+    near(rows[2].share, 4900.0 / 13345.0);
 }
 
 #[test]
@@ -199,7 +218,26 @@ fn schema_is_checked_and_the_reader_reads_what_the_crate_writes() {
     r.warnings = vec![(event, 2)];
     let json = r.to_string();
     assert_eq!(parse(&json).unwrap().to_string(), json);
-    assert!(parse(&json.replace("\"schema\":2", "\"schema\":3")).is_err());
+    assert!(parse(&json.replace("\"schema\":3", "\"schema\":4")).is_err());
+    assert!(parse(&json.replace("\"schema\":3", "\"schema\":1")).is_err());
+}
+
+#[test]
+fn schema_2_is_read_and_named() {
+    // as the crate wrote it before: the handle guards' spans in busy of par
+    let mut old = NODES.to_vec();
+    old[3] = (&["par"], &[("calls", 1), ("wall", 1000), ("busy", 3600)]);
+    old[4] = (&["par", "task"], &[("calls", 4), ("busy", 3500)]);
+    let json = common::run(&old).record.to_string();
+    let run = rsprobe_tool::read("old.json", &json.replace("\"schema\":3", "\"schema\":2"));
+    let run = run.unwrap();
+    assert_eq!(run.schema, 2);
+    let at = |p: &str| run.record.nodes[run.record.find(&[p]).unwrap() as usize].clone();
+    assert_eq!(at("par").get("worker_calls"), 0);
+    let task = run.record.find(&["par", "task"]).unwrap() as usize;
+    assert_eq!(run.record.nodes[task].get("worker_calls"), 4);
+    let text = report::text(&[run], &[], false);
+    assert!(text.lines().next().unwrap().contains("Schema 2 in 1 of 1"));
 }
 
 fn solve_in(module: &'static str) -> Run {
@@ -356,20 +394,42 @@ fn no_warnings_no_section() {
     assert!(!report::text(&[run(&[(&[], &[("wall", 100)])])], &[], false).contains("warnings"));
 }
 
-// A section `sec` on the calling thread whose tasks ran on workers inside the
-// tasks of an outer section `par`: `sec` has wall time only, its tasks busy
-// time only. inner 10 ns, outer 5 ns.
+// Two sections on the calling thread: `par`, whose four tasks run `outer`
+// with `inner` inside it on the worker, and `sec` with 100 tasks of one
+// `task` each. inner 10 ns, outer 5 ns.
 const WORKERS: common::Tree = &[
     (&[], &[("wall", 10000)]),
-    (&["par"], &[("calls", 1), ("wall", 3000), ("busy", 40000)]),
-    (&["par", "outer"], &[("calls", 4), ("busy", 38000)]),
+    (
+        &["par"],
+        &[("calls", 1), ("wall", 3000), ("pool", 40000), ("tasks", 4)],
+    ),
+    (
+        &["par", "outer"],
+        &[("calls", 4), ("worker_calls", 4), ("busy", 38000)],
+    ),
+    (
+        &["par", "outer", "inner"],
+        &[("calls", 8), ("worker_calls", 8), ("busy", 20000)],
+    ),
     (
         &["sec"],
-        &[("calls", 1), ("wall", 2000), ("width", 8), ("sections", 2)],
+        &[
+            ("calls", 1),
+            ("wall", 2000),
+            ("pool", 31000),
+            ("tasks", 100),
+            ("width", 8),
+            ("sections", 2),
+        ],
     ),
     (
         &["sec", "task"],
-        &[("calls", 100), ("busy", 30000), ("nnz", 600)],
+        &[
+            ("calls", 100),
+            ("worker_calls", 100),
+            ("busy", 30000),
+            ("nnz", 600),
+        ],
     ),
 ];
 
@@ -378,32 +438,76 @@ fn workers() -> Vec<Run> {
 }
 
 #[test]
-fn a_measure_without_time_is_not_corrected() {
-    // By hand: a time measure a node has none of is not corrected.
-    // par:   wall 3000 - 10 = 2990, self 2990; busy 40000 - 4*15 = 39940
-    // outer: busy 38000 - 4*10 = 37960, self 37960
-    // sec:   wall 2000 - 10 = 1990, self 1990; busy 0 (no interval to correct)
-    // task:  busy 30000 - 100*10 = 29000, self 29000
-    // run:   wall 10000 - 2*15 = 9970, self 9970 - 2990 - 1990 = 4990
-    //        busy = busy of par and sec = 39940
-    let expected: [(&[&str], [f64; 3]); 5] = [
-        (&[], [9970.0, 0.0, 4990.0]),
-        (&["par"], [2990.0, 39940.0, 2990.0]),
-        (&["par", "outer"], [0.0, 37960.0, 37960.0]),
-        (&["sec"], [1990.0, 0.0, 1990.0]),
-        (&["sec", "task"], [0.0, 29000.0, 29000.0]),
+fn correction_per_kind_of_thread() {
+    // By hand; a time a node has none of is not corrected:
+    // inner: busy 20000 - 8*10            = 19920, self 19920
+    // outer: busy 38000 - 4*10 - 8*15     = 37840, self 37840 - 19920 = 17920
+    // par:   wall 3000 - 10               = 2990, self 2990
+    //        pool 40000 - (4+8)*15        = 39820
+    // task:  busy 30000 - 100*10          = 29000, self 29000
+    // sec:   wall 2000 - 10               = 1990, self 1990
+    //        pool 31000 - 100*15          = 29500
+    // run:   wall 10000 - 2*15            = 9970, self 9970 - 2990 - 1990 = 4990
+    //        thread time 9970 + 39820 + 29500 = 79290
+    let expected: [(&[&str], [f64; 4]); 6] = [
+        (&[], [9970.0, 0.0, 0.0, 4990.0]),
+        (&["par"], [2990.0, 0.0, 39820.0, 2990.0]),
+        (&["par", "outer"], [0.0, 37840.0, 0.0, 17920.0]),
+        (&["par", "outer", "inner"], [0.0, 19920.0, 0.0, 19920.0]),
+        (&["sec"], [1990.0, 0.0, 29500.0, 1990.0]),
+        (&["sec", "task"], [0.0, 29000.0, 0.0, 29000.0]),
     ];
     let (rows, run) = report::rows(&workers(), &[], true);
     for (p, v) in expected {
         let r = row(&rows, p);
-        assert_eq!(
-            [r.v.get("wall"), r.v.get("busy"), r.v.get("self")],
-            v,
-            "{p:?}"
-        );
+        let got = ["wall", "busy", "pool", "self"].map(|m| r.v.get(m));
+        assert_eq!(got, v, "{p:?}");
+        assert!(!r.mixed);
     }
-    assert_eq!((run.get("wall"), run.get("busy")), (9970.0, 39940.0));
-    near(row(&rows, &["sec", "task"]).share, 29000.0 / 39940.0);
+    assert_eq!(
+        [run.get("wall"), run.get("pool"), run.get("thread")],
+        [9970.0, 69320.0, 79290.0]
+    );
+    near(row(&rows, &["sec", "task"]).share, 29000.0 / 79290.0);
+}
+
+#[test]
+fn a_node_with_tasks_and_worker_instances_is_marked() {
+    // `block` runs on workers inside the tasks of `par` and has tasks of its
+    // own: its leaves are taken as run in its tasks.
+    let tree: common::Tree = &[
+        (&[], &[("wall", 1000)]),
+        (
+            &["par"],
+            &[("calls", 1), ("wall", 900), ("pool", 1600), ("tasks", 2)],
+        ),
+        (
+            &["par", "block"],
+            &[
+                ("calls", 2),
+                ("worker_calls", 2),
+                ("busy", 1500),
+                ("pool", 600),
+                ("tasks", 3),
+            ],
+        ),
+        (
+            &["par", "block", "leaf"],
+            &[("calls", 6), ("worker_calls", 6), ("busy", 1200)],
+        ),
+    ];
+    let runs = [calibrated(vec![]).run("m.json", tree)];
+    let (rows, _) = report::rows(&runs, &[], true);
+    // block: busy 1500 - 2*10 = 1480, pool 600 - 6*15 = 510, self 1480
+    // par:   pool 1600 - 2*15 = 1570 (leaf lies below block's tasks)
+    let block = row(&rows, &["par", "block"]);
+    assert!(block.mixed && !row(&rows, &["par"]).mixed);
+    let got = ["busy", "pool", "self"].map(|m| block.v.get(m));
+    assert_eq!(got, [1480.0, 510.0, 1480.0]);
+    assert_eq!(row(&rows, &["par"]).v.get("pool"), 1570.0);
+    let text = report::text(&runs, &[], false);
+    assert!(line(&text, "    block").contains("% ?"));
+    assert!(!line(&text, "  par").contains('?'));
 }
 
 #[test]
@@ -417,8 +521,12 @@ fn an_open_root_has_no_self_time() {
 #[test]
 fn ns_per_unit_only_where_the_time_is_the_nodes_own() {
     let (rows, _) = report::rows(&workers(), &[], true);
-    // sec waits for tasks timed in busy: no ns/width, no ns/sections
-    assert_eq!(ratios(row(&rows, &["sec"])), []);
+    // sec has tasks, its work is in their pool time: no ns/width, no
+    // ns/sections
+    assert_eq!(
+        ratios(row(&rows, &["sec"])),
+        [("pool/wall", 29500.0 / 1990.0)]
+    );
     assert_eq!(
         ratios(row(&rows, &["sec", "task"])),
         [("ns/nnz", 29000.0 / 600.0)]
@@ -433,7 +541,10 @@ fn asked_ratios() {
     ];
     let runs = workers();
     let (rows, _) = report::rows(&runs, &asked, true);
-    assert_eq!(ratios(row(&rows, &["sec"])), [("width/sections", 4.0)]);
+    assert_eq!(
+        ratios(row(&rows, &["sec"])),
+        [("pool/wall", 29500.0 / 1990.0), ("width/sections", 4.0)]
+    );
     assert_eq!(
         ratios(row(&rows, &["sec", "task"])),
         [("ns/nnz", 29000.0 / 600.0), ("busy/nnz", 29000.0 / 600.0)]
@@ -485,6 +596,7 @@ fn medians_with_the_range() {
         [
             ("iterations", (7.0, 8.0)),
             ("self", (400.0, 600.0)),
+            ("time", (400.0, 600.0)),
             ("wall", (400.0, 600.0))
         ]
     );
@@ -502,7 +614,7 @@ fn median_text() {
     assert!(out.contains("3 records, median over records."));
     let l = line(&out, "  solve");
     for part in [
-        "wall [0.000..0.001]",
+        "time [0.000..0.001]",
         "nnz=50,",
         "iterations=7..8 differs",
         "peak max 900",
@@ -561,13 +673,20 @@ fn max_is_merged_by_maximum() {
 /// thread's values: the calling thread at the root and `par`, two workers at
 /// `par/task` with unequal busy time.
 fn with_threads(threads: bool) -> Run {
+    let task = [
+        ("calls", 3),
+        ("worker_calls", 3),
+        ("busy", 3800),
+        ("allocs", 6),
+        ("peak", 640),
+    ];
     let tree: common::Tree = &[
         (&[], &[("wall", 5000)]),
-        (&["par"], &[("calls", 1), ("wall", 4000), ("busy", 4000)]),
         (
-            &["par", "task"],
-            &[("calls", 3), ("busy", 3800), ("allocs", 6), ("peak", 640)],
+            &["par"],
+            &[("calls", 1), ("wall", 4000), ("pool", 4000), ("tasks", 3)],
         ),
+        (&["par", "task"], &task),
     ];
     let mut r = Hand {
         maxima: vec!["peak"],
@@ -601,8 +720,14 @@ fn with_threads(threads: bool) -> Run {
             true,
             [
                 &[],
-                &[("busy", 3000)],
-                &[("calls", 2), ("busy", 2900), ("allocs", 4), ("peak", 640)],
+                &[("pool", 3000), ("tasks", 2)],
+                &[
+                    ("calls", 2),
+                    ("worker_calls", 2),
+                    ("busy", 2900),
+                    ("allocs", 4),
+                    ("peak", 640),
+                ],
             ],
         ),
         thread(
@@ -610,8 +735,14 @@ fn with_threads(threads: bool) -> Run {
             true,
             [
                 &[],
-                &[("busy", 1000)],
-                &[("calls", 1), ("busy", 900), ("allocs", 2), ("peak", 320)],
+                &[("pool", 1000), ("tasks", 1)],
+                &[
+                    ("calls", 1),
+                    ("worker_calls", 1),
+                    ("busy", 900),
+                    ("allocs", 2),
+                    ("peak", 320),
+                ],
             ],
         ),
     ];
@@ -640,6 +771,7 @@ fn threads_at_a_node() {
                 "2",
                 "0.000",
                 "0.003",
+                "0.000",
                 "1.526",
                 "allocs=4,",
                 "peak",
@@ -652,6 +784,7 @@ fn threads_at_a_node() {
                 "1",
                 "0.000",
                 "0.001",
+                "0.000",
                 "0.474",
                 "allocs=2,",
                 "peak",
