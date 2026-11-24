@@ -165,10 +165,23 @@ fn a_sink_takes_events_up_to_its_level_as_stamped_lines() {
     assert_eq!(lines, ["   0.000014 warn  solve: small pivot"]);
 }
 
+/// A sink for a reader: the texts it gets.
+#[derive(Clone, Default)]
+struct Reader(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl rsprobe::Sink for Reader {
+    fn event(&self, e: &rsprobe::Event, _: &rsprobe::Path) {
+        self.0.lock().unwrap().push(e.kind.to_string());
+    }
+}
+
 #[test]
-fn sinks_get_a_repeated_warning_at_powers_of_ten() {
-    let buffer = Buffer::default();
-    let ctx = Context::builder().sink(buffer.clone()).build();
+fn a_reader_gets_a_repeated_warning_at_powers_of_ten_a_buffer_every_one() {
+    let (reader, buffer) = (Reader::default(), Buffer::default());
+    let ctx = Context::builder()
+        .sink(reader.clone())
+        .sink(buffer.clone())
+        .build();
     let _on = ctx.enter();
     for _ in 0..12 {
         warn!("repeated");
@@ -177,7 +190,7 @@ fn sinks_get_a_repeated_warning_at_powers_of_ten() {
     for i in 0..111 {
         warn!("distinct {i}");
     }
-    let texts: Vec<String> = drained(&buffer).into_iter().map(|e| e.1).collect();
+    let texts = reader.0.lock().unwrap().clone();
     assert_eq!(texts.iter().filter(|t| *t == "each time").count(), 12);
     let repeated: Vec<_> = texts.iter().filter(|t| t.starts_with("repeated")).collect();
     assert_eq!(repeated, ["repeated", "repeated (10 times)"]);
@@ -191,6 +204,12 @@ fn sinks_get_a_repeated_warning_at_powers_of_ten() {
     assert_eq!(
         distinct[100],
         "distinct 108 (not kept, 10 beyond 100 distinct)"
+    );
+    let all = drained(&buffer);
+    assert_eq!(all.iter().filter(|e| e.1 == "repeated").count(), 12);
+    assert_eq!(
+        all.iter().filter(|e| e.1.starts_with("distinct")).count(),
+        111
     );
     let r = ctx.record();
     assert_eq!((r.warnings[0].1, r.warnings_dropped), (12, 12));

@@ -283,19 +283,25 @@ macro_rules! message {
 }
 
 /// Emits a progress event at the current node: `progress!(done, total)` at
-/// level INFO, `progress!(DEBUG, done, total)` at a given level. The values
-/// are converted with `as u64` and evaluated only when the site is active.
-/// Without the feature `on`: the values are type-checked in a branch never
-/// taken.
+/// level INFO, `progress!(DEBUG, done, total)` at a given level, and with a
+/// text after a semicolon: `progress!(k, 0; "residual {:.1e}", r)`, a total
+/// of 0 where it is not known. A site's events pass at most once an interval
+/// ([`Builder::progress_interval`]), so a loop calls it every pass. The
+/// values are converted with `as u64` and evaluated only when the site is
+/// active, the text is formatted only when the event passes. Without the
+/// feature `on`: the values are type-checked in a branch never taken.
 #[macro_export]
 macro_rules! progress {
-    ($done:expr, $total:expr) => {
-        $crate::progress!(INFO, $done, $total)
+    ($done:expr, $total:expr $(; $($a:tt)+)?) => {
+        $crate::progress!(INFO, $done, $total $(; $($a)+)?)
     };
     ($level:ident, $done:expr, $total:expr) => {
+        $crate::progress!($level, $done, $total; "")
+    };
+    ($level:ident, $done:expr, $total:expr; $($a:tt)+) => {
         $crate::on_or!(
-            { $crate::site!($level, "").event(|| $crate::Kind::Progress { done: $done as u64, total: $total as u64 }) }
-            { if false { let _ = ($done, $total); } }
+            { $crate::site!($level, "").progress(|| ($done as u64, $total as u64), || ::std::format!($($a)+)) }
+            { if false { let _ = ($done, $total, ::std::format_args!($($a)+)); } }
         )
     };
 }

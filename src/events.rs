@@ -14,21 +14,33 @@ use std::sync::Arc;
 pub enum Kind {
     /// A formatted message.
     Message(String),
-    /// `done` of `total` units of work.
+    /// `done` of `total` units of work, with a text or an empty one.
     Progress {
         /// Units done.
         done: u64,
-        /// Units in total.
+        /// Units in total; 0 where the total is not known.
         total: u64,
+        /// What the work is at: a residual, a frequency.
+        text: String,
     },
 }
 
 impl Display for Kind {
-    /// The text of a message; `done/total` for progress.
+    /// The text of a message; for progress `done/total` (`done` alone
+    /// where the total is not known) and its text.
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Kind::Message(t) => f.write_str(t),
-            Kind::Progress { done, total } => write!(f, "{done}/{total}"),
+            Kind::Progress { done, total, text } => {
+                write!(f, "{done}")?;
+                if *total > 0 {
+                    write!(f, "/{total}")?;
+                }
+                if !text.is_empty() {
+                    write!(f, " {text}")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -97,8 +109,9 @@ impl Warnings {
 /// kept among the warnings if its level is WARN or above, in the stream if
 /// there is one, and passed to every sink of its level; with none of the
 /// three `kind` is not called. Of the events at WARN and above with the same
-/// site and text the sinks get the first, the tenth, the hundredth and so
-/// on, with the count appended. Its allocations, and those of the sinks, are
+/// site and text a sink gets the first, the tenth, the hundredth and so on,
+/// with the count appended, unless it takes [`every`](Sink::every) event.
+/// Its allocations, and those of the sinks, are
 /// not counted by [`Alloc`](crate::Alloc); its time is the measure `emit` of
 /// the node and not part of the spans open on this thread.
 pub(crate) fn emit(
@@ -114,7 +127,7 @@ pub(crate) fn emit(
     quiet(|| {
         let clock = shared.cfg.clock;
         let begin = clock();
-        let mut e = Event {
+        let e = Event {
             node,
             level,
             module,
@@ -123,11 +136,6 @@ pub(crate) fn emit(
             time: begin - shared.start,
             kind: kind(),
         };
-        if let Kind::Progress { done, total } = e.kind {
-            if !due(&shared, (file, line), e.time, done >= total) {
-                return;
-            }
-        }
         if let Some(s) = &shared.stream {
             lock(s).events.push((thread, e.clone()));
         }
@@ -135,16 +143,20 @@ pub(crate) fn emit(
             (true, Kind::Message(_)) => lock(&shared.warnings).add(&e),
             _ => Some(String::new()),
         };
-        if let Some(repeat) = repeat {
-            if let Kind::Message(text) = &mut e.kind {
-                text.push_str(&repeat);
-            }
-            let path = Path {
-                shared: &shared,
-                node,
-            };
-            for s in shared.cfg.sinks.iter().filter(shown) {
+        // The event with the count in its text, where it has one.
+        let counted = repeat.as_ref().filter(|r| !r.is_empty()).map(|r| Event {
+            kind: Kind::Message(format!("{}{r}", e.kind)),
+            ..e.clone()
+        });
+        let path = Path {
+            shared: &shared,
+            node,
+        };
+        for s in shared.cfg.sinks.iter().filter(shown) {
+            if s.1.every() {
                 s.1.event(&e, &path);
+            } else if repeat.is_some() {
+                s.1.event(counted.as_ref().unwrap_or(&e), &path);
             }
         }
         let ns = clock() - begin;
@@ -161,10 +173,11 @@ pub(crate) struct Paced {
     open: bool,
 }
 
-/// Whether the progress event of the site at (file, line) at `now` passes,
-/// by the rule of [`Builder::progress_interval`](crate::Builder::progress_interval);
+/// Whether the progress event of the site at (file, line) passes now, by the
+/// rule of [`Builder::progress_interval`](crate::Builder::progress_interval);
 /// `last` for its closing event.
-fn due(shared: &Shared, site: (&'static str, u32), now: u64, last: bool) -> bool {
+fn due(shared: &Shared, site: (&'static str, u32), last: bool) -> bool {
+    let now = (shared.cfg.clock)() - shared.start;
     let mut sites = lock(&shared.progress);
     let i = sites
         .iter()
@@ -187,13 +200,35 @@ fn due(shared: &Shared, site: (&'static str, u32), now: u64, last: bool) -> bool
 
 impl Site {
     /// Emits the event `kind()` at the current node if this site is active;
-    /// what [`error!`](crate::error) and [`progress!`](crate::progress)
-    /// expand to.
+    /// what [`error!`](crate::error) expands to.
     #[inline]
     pub fn event(&'static self, kind: impl FnOnce() -> Kind) {
         let here = self.active(|cur, e, _| (e.shared().clone(), cur.node, e.thread));
         if let Some(here) = here {
             emit(here, (self.level, self.module, self.file, self.line), kind)
+        }
+    }
+
+    /// Emits a progress event of `units()` (done, total) at the current node
+    /// if this site is active and the event is due; `text` is called only
+    /// then. What [`progress!`](crate::progress) expands to.
+    #[inline]
+    pub fn progress(
+        &'static self,
+        units: impl FnOnce() -> (u64, u64),
+        text: impl FnOnce() -> String,
+    ) {
+        let here = self.active(|cur, e, _| (e.shared().clone(), cur.node, e.thread));
+        if let Some(here) = here {
+            let (done, total) = units();
+            if due(&here.0, (self.file, self.line), total > 0 && done >= total) {
+                let site = (self.level, self.module, self.file, self.line);
+                emit(here, site, || Kind::Progress {
+                    done,
+                    total,
+                    text: text(),
+                })
+            }
         }
     }
 }

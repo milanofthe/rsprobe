@@ -44,4 +44,21 @@ fn a_site_reports_once_an_interval_and_the_end_of_a_run_it_reported() {
         (3350, "10/10"),
     ];
     assert_eq!(seen, expected.map(|(t, s)| (t, s.to_string())));
+    // With a text and no known total: the text is formatted when the event
+    // passes, and no event closes the run.
+    let formatted = AtomicU64::new(0);
+    let residual = |k: u64, ms: u64| {
+        TIME.store(ms * 1_000_000, SeqCst);
+        progress!(k, 0; "residual {}", {
+            formatted.fetch_add(1, SeqCst);
+            1.0 / k as f64
+        });
+    };
+    residual(1, 5000);
+    residual(2, 5100);
+    residual(4, 6000);
+    let mut seen = Vec::new();
+    buffer.drain(|e, _| seen.push(e.kind.to_string()));
+    assert_eq!(seen, ["1 residual 1", "4 residual 0.25"]);
+    assert_eq!(formatted.load(SeqCst), 2);
 }
