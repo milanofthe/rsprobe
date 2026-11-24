@@ -91,9 +91,8 @@ fn main() {
     if let Some(path) = trace {
         std::fs::write(path, ctx.trace()).expect("writing the trace");
     }
-    let record = ctx.record_threads().to_string();
-    match std::env::var_os("RSPROBE_RECORD") {
-        Some(path) => std::fs::write(path, record).expect("writing the record"),
-        None => println!("{record}"),
+    let record = ctx.record_threads();
+    if !record.save().expect("writing the record") {
+        println!("{record}");
     }
 }

@@ -59,6 +59,12 @@ impl<P: Display> Display for Stamped<'_, P> {
 }
 
 impl Event {
+    /// The event at `path` without time and level, for a host that shows
+    /// those itself: `a/b: text`, the text alone at the root.
+    pub fn text<'a, P: Display>(&'a self, path: &'a P) -> impl Display + 'a {
+        Line(self, path)
+    }
+
     /// The line [`Stderr`] writes for the event at `path`, for a host that
     /// drains a [`Buffer`]: `   0.013880 warn  a/b: text`.
     pub fn line<'a, P: Display>(&'a self, path: &'a P) -> impl Display + 'a {
