@@ -16,13 +16,17 @@ use std::sync::{Arc, Mutex};
 pub type Clock = fn() -> u64;
 
 /// Built-in measures, exact or not; user measures follow by name, of the kind
-/// of their first site. The last four are the counters of [`Alloc`](
+/// of their first site. `worker_calls`, `pool` and `tasks` are omitted from a
+/// node where they are zero. The last four are the counters of [`Alloc`](
 /// crate::Alloc), omitted from a record where they are zero at every node;
 /// `peak` is merged by maximum.
-const BUILTIN: [(&str, bool); 7] = [
+const BUILTIN: [(&str, bool); 10] = [
     ("calls", true),
     ("wall", false),
     ("busy", false),
+    ("worker_calls", true),
+    ("pool", false),
+    ("tasks", true),
     ("bytes", true),
     ("allocs", true),
     ("freed", true),
@@ -31,8 +35,11 @@ const BUILTIN: [(&str, bool); 7] = [
 pub(crate) const CALLS: usize = 0;
 pub(crate) const WALL: usize = 1;
 pub(crate) const BUSY: usize = 2;
-pub(crate) const BYTES: usize = 3;
-pub(crate) const PEAK: usize = 6;
+pub(crate) const WORKER_CALLS: usize = 3;
+pub(crate) const POOL: usize = 4;
+pub(crate) const TASKS: usize = 5;
+pub(crate) const BYTES: usize = 6;
+pub(crate) const PEAK: usize = 9;
 
 /// Two values of a measure merged: by maximum or summed.
 fn merge(max: bool, a: u64, b: u64) -> u64 {
@@ -355,6 +362,10 @@ impl Context {
                     v.1 = merge(i == PEAK, v.1, c.load(Relaxed));
                 }
             }
+            // A thread counts a scope on a worker in `worker_calls` alone.
+            for n in &mut nodes {
+                n.values[CALLS].1 += n.values[WORKER_CALLS].1;
+            }
             for (_, n, s, c) in t.extras.iter().filter(|c| of(c.0)) {
                 let site = r.sites[*s as usize];
                 let (name, values) = (site.name, &mut nodes[*n as usize].values);
@@ -373,14 +384,16 @@ impl Context {
                 max.extend(site.max.then_some(site.name));
             }
         }
-        let unused: Vec<&str> = BUILTIN[BYTES..]
+        let unused: Vec<&str> = BUILTIN[WORKER_CALLS..]
             .iter()
             .map(|m| m.0)
             .filter(|&m| nodes.iter().all(|n| n.get(m) == 0))
             .collect();
+        let sparse = |m: &str| BUILTIN[WORKER_CALLS..BYTES].iter().any(|b| b.0 == m);
         let strip = |nodes: &mut Vec<Node>| {
             for n in nodes {
-                n.values.retain(|v| !unused.contains(&v.0));
+                n.values
+                    .retain(|v| !unused.contains(&v.0) && (v.1 != 0 || !sparse(v.0)));
             }
         };
         strip(&mut nodes);

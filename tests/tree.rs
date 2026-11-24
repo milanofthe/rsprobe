@@ -129,7 +129,7 @@ fn record_parses_and_round_trips() {
     }
     let r = ctx.record();
     let v: serde_json::Value = serde_json::from_str(&r.to_string()).unwrap();
-    assert_eq!(v["schema"], 2);
+    assert_eq!(v["schema"], 3);
     assert_eq!(v["params"]["n"].as_f64(), Some(1000.0));
     assert_eq!(v["params"]["tol"].as_f64(), Some(1e-9));
     assert_eq!(v["params"]["case"], "a \"quoted\"\nname");
@@ -221,4 +221,6 @@ fn a_handle_entered_where_its_context_is_current_only_moves_the_node() {
     assert_eq!(r.nodes[t as usize].get("calls"), 1);
     assert_eq!(r.nodes[a as usize].get("busy"), 0);
     assert_eq!(r.nodes[t as usize].get("busy"), 0);
+    assert_eq!(r.nodes[a as usize].get("tasks"), 0);
+    assert_eq!(r.nodes[a as usize].get("pool"), 0);
 }

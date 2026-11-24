@@ -54,9 +54,10 @@ pub struct Node {
     /// Scope site id; `None` for the root.
     pub site: Option<u32>,
     /// Values per measure name, summed or for those in [`Record::max`] the
-    /// maximum: `calls`, `wall`, `busy` (ns), `bytes`, `allocs`, `freed`,
-    /// `peak` where any node has them, then the user measures present at
-    /// this node.
+    /// maximum: `calls`, `wall`, `busy` (ns); `worker_calls`, `pool` (ns) and
+    /// `tasks` where not zero; `bytes`, `allocs`, `freed`, `peak` where any
+    /// node has them; then the user measures present at this node. See the
+    /// crate documentation for their meaning.
     pub values: Vec<(&'static str, u64)>,
 }
 
