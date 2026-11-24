@@ -1,5 +1,4 @@
-//! JSON: a reader for records and traces, and the indented writer of
-//! `report --json`. Numbers keep their text.
+//! JSON: a reader for records and traces. Numbers keep their text.
 
 use crate::Result;
 
@@ -24,16 +23,6 @@ impl Json {
             return Err(p.err("trailing characters"));
         }
         Ok(v)
-    }
-
-    /// A number, integral values without a fraction (see [`crate::fmt::num`]).
-    pub fn num(x: f64) -> Json {
-        Json::Num(crate::fmt::num(x))
-    }
-
-    /// An object of the members.
-    pub fn obj<K: Into<String>>(kv: impl IntoIterator<Item = (K, Json)>) -> Json {
-        Json::Obj(kv.into_iter().map(|(k, v)| (k.into(), v)).collect())
     }
 
     /// The member `key` of an object.
@@ -71,64 +60,6 @@ impl Json {
         let Json::Obj(o) = self else { return None };
         Some(o)
     }
-
-    /// The document indented by one space per level, `": "` after a key,
-    /// everything outside printable ASCII escaped.
-    pub fn pretty(&self) -> String {
-        let mut out = String::new();
-        self.write(&mut out, 0);
-        out
-    }
-
-    fn write(&self, out: &mut String, depth: usize) {
-        let (open, items): (char, Vec<(Option<&str>, &Json)>) = match self {
-            Json::Null => return out.push_str("null"),
-            Json::Bool(b) => return out.push_str(if *b { "true" } else { "false" }),
-            Json::Num(t) => return out.push_str(t),
-            Json::Str(s) => return quote(out, s),
-            Json::Arr(a) => ('[', a.iter().map(|x| (None, x)).collect()),
-            Json::Obj(o) => ('{', o.iter().map(|(k, x)| (Some(k.as_str()), x)).collect()),
-        };
-        let close = if open == '[' { ']' } else { '}' };
-        out.push(open);
-        let pad = |out: &mut String, d| {
-            out.extend(std::iter::once('\n').chain(std::iter::repeat_n(' ', d)))
-        };
-        for (i, (k, x)) in items.iter().enumerate() {
-            out.push_str(if i > 0 { "," } else { "" });
-            pad(out, depth + 1);
-            if let Some(k) = k {
-                quote(out, k);
-                out.push_str(": ");
-            }
-            x.write(out, depth + 1);
-        }
-        if !items.is_empty() {
-            pad(out, depth);
-        }
-        out.push(close);
-    }
-}
-
-/// A string literal, everything outside printable ASCII escaped.
-fn quote(out: &mut String, s: &str) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' | '\\' => out.extend(['\\', c]),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            ' '..='~' => out.push(c),
-            c => c
-                .encode_utf16(&mut [0; 2])
-                .iter()
-                .for_each(|u| out.push_str(&format!("\\u{u:04x}"))),
-        }
-    }
-    out.push('"');
 }
 
 struct Parser<'a> {

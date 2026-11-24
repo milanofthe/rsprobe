@@ -6,7 +6,6 @@ mod common;
 
 use common::{run, Hand};
 use rsprobe::{Event, Kind, Level, Node, Param, Site, ThreadNodes};
-use rsprobe_tool::json::Json;
 use rsprobe_tool::records::Path;
 use rsprobe_tool::report::{self, asked_ratio, Row};
 use rsprobe_tool::{parse, Run};
@@ -121,16 +120,15 @@ fn root_open_at_record_time() {
 }
 
 #[test]
-fn folded_and_json() {
+fn folded_and_rows() {
     let runs = nodes();
     let folded = report::folded(&runs);
     assert_eq!(
         folded.lines().collect::<Vec<_>>(),
         ["run 985", "run;solve 2930", "run;solve;it 4900", "run;par 990", "run;par;task 3460"]
     );
-    let doc = Json::parse(&report::json(&runs, &[], false)).unwrap();
-    let node = &doc.get("nodes").unwrap().arr().unwrap()[2];
-    assert_eq!(node.get("measures"), Some(&Json::obj([("iterations", Json::Num("10".into()))])));
+    let (rows, _) = report::rows(&runs, &[], false);
+    assert_eq!(rows[2].measures().copied().collect::<Vec<_>>(), [("iterations", 10.0)]);
 }
 
 #[test]
@@ -241,12 +239,9 @@ fn warnings_after_the_tree() {
         ["3", "not", "kept,", "beyond the record's bound"],
     ];
     assert_eq!(rows, expected);
-    let doc = Json::parse(&report::json(&runs, &[], false)).unwrap();
-    let w =
-        Json::parse(r#"{"path": ["solve"], "level": "warn", "text": "pivot small", "count": 6}"#)
-            .unwrap();
-    assert_eq!(doc.get("warnings").unwrap().arr().unwrap()[0], w);
-    assert_eq!(doc.get("warnings_dropped").and_then(Json::u64), Some(3));
+    let (w, dropped) = report::warnings(&runs);
+    assert_eq!((w[0].0[0].0, w[0].1, w[0].2.as_str(), w[0].3), ("solve", "warn", "pivot small", 6));
+    assert_eq!(dropped, 3);
 }
 
 #[test]
@@ -407,16 +402,9 @@ fn sum_restores_the_sums() {
         [("nnz", 150.0), ("iterations", 22.0), ("peak", 900.0)]
     );
     assert!(report::text(&runs, &[], true).contains("3 records, summed."));
-    let doc = Json::parse(&report::json(&runs, &[], false)).unwrap();
-    let spread = doc.get("nodes").unwrap().arr().unwrap()[1]
-        .get("spread")
-        .unwrap()
-        .get("iterations")
-        .unwrap();
-    assert_eq!(
-        spread.arr().unwrap().iter().map(|x| x.f64().unwrap()).collect::<Vec<_>>(),
-        [7.0, 8.0]
-    );
+    let (rows, _) = report::rows(&runs, &[], false);
+    let spread = rows[1].spread.iter().find(|s| s.0 == "iterations");
+    assert_eq!(spread.map(|s| s.1), Some((7.0, 8.0)));
 }
 
 #[test]

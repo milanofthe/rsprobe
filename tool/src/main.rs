@@ -7,7 +7,7 @@ const USAGE: &str = "usage: rsprobe COMMAND ...
 
 Reads rsprobe run records; a set of records is a record file or a directory of them.
 
-  report RECORD... [--folded | --json | --threads [NODE]] [--sum] [--ratio A/B]...
+  report RECORD... [--folded | --threads [NODE]] [--sum] [--ratio A/B]...
       the tree with corrected times; over several records the medians
   compare A B [--aa A2] [--gate MEASURE]...
       two sets of records; exit 1 when a node fails the gate
@@ -103,19 +103,14 @@ fn run(argv: &[String]) -> Result<i32> {
     };
     let out = match cmd.as_str() {
         "report" => {
-            let a = Args::parse(
-                argv,
-                &["--folded", "--json", "--sum", "--ratio=", "--threads?"],
-                false,
-            )?;
-            a.exclusive(&["--folded", "--json", "--threads"])?;
+            let a = Args::parse(argv, &["--folded", "--sum", "--ratio=", "--threads?"], false)?;
+            a.exclusive(&["--folded", "--threads"])?;
             let asked: Vec<_> =
                 a.all("--ratio").into_iter().map(report::asked_ratio).collect::<Result<_>>()?;
             let (runs, sum) = (a.records()?, a.one("--sum").is_some());
-            match (a.one("--folded"), a.one("--threads"), a.one("--json")) {
-                (Some(_), _, _) => report::folded(&runs),
-                (_, Some(t), _) => report::threads(&runs, Some(t).filter(|t| !t.is_empty()))?,
-                (_, _, Some(_)) => report::json(&runs, &asked, sum),
+            match (a.one("--folded"), a.one("--threads")) {
+                (Some(_), _) => report::folded(&runs),
+                (_, Some(t)) => report::threads(&runs, Some(t).filter(|t| !t.is_empty()))?,
                 _ => report::text(&runs, &asked, sum),
             }
         }

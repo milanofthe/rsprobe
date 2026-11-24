@@ -3,7 +3,6 @@
 
 use crate::constants::OVERHEAD_MARK;
 use crate::fmt::{g, name, num};
-use crate::json::Json;
 use crate::overhead::{corrected, cost_share, domain, share};
 use crate::records::{
     children, median_nodes, preorder, total, union, Map, Nodes, Path, Run, Set, Spread, Values,
@@ -290,57 +289,6 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
         }
     }
     out.join("\n")
-}
-
-/// The report as JSON: records, params, run, a row per node, warnings.
-pub fn json(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
-    let (rs, run) = rows(runs, asked, summed);
-    let (ws, dropped) = warnings(runs);
-    let values = |v: &[(&'static str, f64)]| Json::obj(v.iter().map(|&(m, x)| (m, Json::num(x))));
-    let path = |p: &Path| Json::Arr(p.iter().map(|s| Json::Str(s.0.into())).collect());
-    let param = |x: &Param| match x {
-        Param::Str(s) => Json::Str(s.clone()),
-        Param::Num(x) => {
-            if x.is_finite() {
-                Json::num(*x)
-            } else {
-                Json::Null
-            }
-        }
-    };
-    let ps = params(runs).into_iter().map(|(k, xs)| (k, Json::Arr(xs.iter().map(param).collect())));
-    let nodes = rs.iter().map(|r| {
-        let mut o: Vec<(&str, Json)> =
-            BUILTIN.iter().map(|&m| (m, Json::num(r.v.get(m)))).collect();
-        let spread = r
-            .spread
-            .iter()
-            .map(|&(m, (lo, hi))| (m, Json::Arr(vec![Json::num(lo), Json::num(hi)])));
-        o.extend([
-            ("path", path(&r.path)),
-            ("domain", Json::Str(r.domain.into())),
-            ("share", Json::num(r.share)),
-            ("cost_share", Json::num(r.cost_share)),
-            ("ratios", Json::obj(r.ratios.iter().map(|(k, x)| (k.as_str(), Json::num(*x))))),
-            ("measures", values(&r.measures().copied().collect::<Vec<_>>())),
-            ("spread", Json::obj(spread)),
-        ]);
-        Json::obj(o)
-    });
-    let ws = ws.iter().map(|(p, level, t, c)| {
-        let (level, text, count) =
-            (Json::Str(level.to_string()), Json::Str(t.clone()), Json::num(*c as f64));
-        Json::obj([("path", path(p)), ("level", level), ("text", text), ("count", count)])
-    });
-    let doc = Json::obj([
-        ("records", Json::num(runs.len() as f64)),
-        ("params", Json::obj(ps)),
-        ("run", values(&run.0)),
-        ("nodes", Json::Arr(nodes.collect())),
-        ("warnings", Json::Arr(ws.collect())),
-        ("warnings_dropped", Json::num(dropped as f64)),
-    ]);
-    doc.pretty()
 }
 
 /// Folded stacks, one line per node with self time in ns: the flame graph's
