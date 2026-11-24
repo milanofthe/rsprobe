@@ -2,7 +2,7 @@
 
 use crate::context::Shared;
 use crate::site::lock;
-use crate::{Event, Kind};
+use crate::{Event, Kind, Level};
 use std::fmt::{self, Display, Formatter};
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -29,9 +29,9 @@ impl Display for Path<'_> {
 }
 
 /// `path: text`, or `text` at the root.
-pub(crate) struct Line<'a>(pub(crate) &'a Event, pub(crate) &'a Path<'a>);
+pub(crate) struct Line<'a, P>(pub(crate) &'a Event, pub(crate) &'a P);
 
-impl Display for Line<'_> {
+impl<P: Display> Display for Line<'_, P> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self.0.node {
             0 => write!(f, "{}", self.0.kind),
@@ -40,30 +40,61 @@ impl Display for Line<'_> {
     }
 }
 
-/// Writes each event to stderr as one line: level, path, text. When stderr
-/// is a terminal, progress is one line rewritten in place until the next
-/// message.
+/// Seconds since the context was built, level and [`Line`].
+struct Stamped<'a, P>(&'a Event, &'a P);
+
+impl<P: Display> Display for Stamped<'_, P> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let (s, level) = (self.0.time as f64 * 1e-9, self.0.level.name());
+        write!(f, "{s:11.6} {level:<5} {}", Line(self.0, self.1))
+    }
+}
+
+impl Event {
+    /// The line [`Stderr`] writes for the event at `path`, for a host that
+    /// drains a [`Buffer`]: `   0.013880 warn  a/b: text`.
+    pub fn line<'a, P: Display>(&'a self, path: &'a P) -> impl Display + 'a {
+        Stamped(self, path)
+    }
+}
+
+/// Writes each event to stderr as its [`line`](Event::line). When stderr is a terminal, progress is one line
+/// rewritten in place until the next message, and a line is set in the style
+/// of its level unless `NO_COLOR` is set.
 #[derive(Default)]
 pub struct Stderr {
     /// A progress line without a line feed is on the terminal.
     open: AtomicBool,
 }
 
+/// ANSI style of a terminal line by level: ERROR red, WARN yellow, DEBUG and
+/// TRACE dim.
+fn style(level: Level) -> &'static str {
+    match level {
+        Level::ERROR => "\x1b[31m",
+        Level::WARN => "\x1b[33m",
+        Level::INFO => "",
+        _ => "\x1b[2m",
+    }
+}
+
 impl Sink for Stderr {
     fn event(&self, e: &Event, path: &Path) {
         let mut w = std::io::stderr().lock();
+        let terminal = w.is_terminal();
         let clear = match self.open.swap(false, Relaxed) {
             true => "\r\x1b[2K",
             false => "",
         };
-        let (level, line) = (e.level.name(), Line(e, path));
-        let _ = match e.kind {
-            Kind::Progress { .. } if w.is_terminal() => {
-                self.open.store(true, Relaxed);
-                write!(w, "{clear}{level} {line}")
-            }
-            _ => writeln!(w, "{clear}{level} {line}"),
+        let on = match terminal && std::env::var_os("NO_COLOR").is_none() {
+            true => style(e.level),
+            false => "",
         };
+        let off = if on.is_empty() { "" } else { "\x1b[0m" };
+        let open = terminal && matches!(e.kind, Kind::Progress { .. });
+        self.open.store(open, Relaxed);
+        let end = if open { "" } else { "\n" };
+        let _ = write!(w, "{clear}{on}{}{off}{end}", e.line(path));
     }
 }
 

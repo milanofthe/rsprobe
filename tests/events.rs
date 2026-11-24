@@ -96,7 +96,7 @@ impl Display for Counted<'_> {
 #[test]
 fn a_site_below_the_threshold_formats_nothing() {
     let n = AtomicU32::new(0);
-    let ctx = Context::new();
+    let ctx = Context::builder().sink(Buffer::default()).build();
     let _on = ctx.enter();
     debug!("{}", Counted(&n));
     trace!("{}", Counted(&n));
@@ -132,6 +132,34 @@ fn warnings_are_deduplicated_and_bounded() {
     assert_eq!(v["warnings"][0]["count"], 3);
     assert_eq!(v["warnings"][0]["level"], "warn");
     assert_eq!(v["warnings_dropped"], 102);
+}
+
+/// Nanoseconds, set by the test of the line.
+static CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[test]
+fn a_sink_takes_events_up_to_its_level_as_stamped_lines() {
+    let (all, warnings) = (Buffer::default(), Buffer::default());
+    let n = AtomicU32::new(0);
+    CLOCK.store(5_000_000, Relaxed);
+    let ctx = Context::builder()
+        .clock(|| CLOCK.load(Relaxed))
+        .sink_at(Level::WARN, warnings.clone())
+        .build();
+    let quiet = Context::builder().sink_at(Level::WARN, all.clone()).build();
+    {
+        let _on = quiet.enter();
+        info!("{}", Counted(&n));
+        assert_eq!(n.load(Relaxed), 0, "no sink at INFO: not formatted");
+    }
+    let _on = ctx.enter();
+    let _s = scope!("solve");
+    info!("shown to no sink");
+    CLOCK.store(5_013_880, Relaxed);
+    warn!("small pivot");
+    let mut lines = Vec::new();
+    warnings.drain(|e, path| lines.push(e.line(&path).to_string()));
+    assert_eq!(lines, ["   0.000014 warn  solve: small pivot"]);
 }
 
 #[test]

@@ -28,8 +28,9 @@
 //!
 //! [`error!`], [`warn!`], [`info!`], [`debug!`], [`trace!`] and [`progress!`]
 //! emit an [`Event`] at the current node; the text is formatted only when the
-//! site is active. The context passes each event to its [`Sink`]s and keeps
-//! the distinct events at WARN and above for the record.
+//! site is active and the event is taken. The context passes each event to
+//! the [`Sink`]s of its level and keeps the distinct events at WARN and above
+//! for the record. [`Stderr`] writes an event as its [`Event::line`].
 //!
 //! # Threads
 //!
