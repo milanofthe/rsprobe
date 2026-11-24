@@ -60,3 +60,35 @@ fn a_site_reports_once_an_interval_and_the_end_of_a_run_it_reported() {
     assert_eq!(seen, ["4 residual 0.25", "3 residual 0.3333333333333333"]);
     assert_eq!(formatted.load(SeqCst), 2);
 }
+
+#[test]
+fn loops_without_a_total_on_two_threads_are_two_runs() {
+    use rsprobe::current;
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    let buffer = Buffer::default();
+    let ctx = Context::builder()
+        .clock(|| CLOCK.load(SeqCst))
+        .sink(buffer.clone())
+        .build();
+    let _on = ctx.enter();
+    let h = current();
+    // One call site, called in turn from this thread and from a worker
+    // whose count is lower: neither restarts the other's run.
+    let count = |k: u64| progress!(k, 0; "iteration");
+    let worker = |k: u64| {
+        std::thread::spawn(move || {
+            let _g = h.enter();
+            count(k)
+        })
+        .join()
+        .unwrap()
+    };
+    count(50);
+    CLOCK.store(900_000_000, SeqCst);
+    worker(1);
+    CLOCK.store(1_500_000_000, SeqCst);
+    count(60);
+    let mut seen = Vec::new();
+    buffer.drain(|e, _| seen.push(e.kind.to_string()));
+    assert_eq!(seen, ["60 iteration"]);
+}

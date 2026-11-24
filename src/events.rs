@@ -168,7 +168,9 @@ pub(crate) fn emit(
 /// A progress site of a context and its current run, times in ns since the
 /// context was built.
 pub(crate) struct Paced {
-    site: (&'static str, u32),
+    /// File and line of the site, and for a site without a total the
+    /// thread: a count without a total is one loop's own.
+    site: (&'static str, u32, u32),
     /// Whether a run is going: begun by an event and not closed.
     running: bool,
     /// When the run began or its last event passed, whichever is later.
@@ -182,7 +184,7 @@ pub(crate) struct Paced {
 /// Whether the progress event of the site at (file, line) with `done` of
 /// `total` units passes now, by the rule of
 /// [`Builder::progress_interval`](crate::Builder::progress_interval).
-fn due(shared: &Shared, site: (&'static str, u32), done: u64, total: u64) -> bool {
+fn due(shared: &Shared, site: (&'static str, u32, u32), done: u64, total: u64) -> bool {
     let now = (shared.cfg.clock)() - shared.start;
     let mut sites = lock(&shared.progress);
     let i = sites
@@ -237,7 +239,10 @@ impl Site {
         let here = self.active(|cur, e, _| (e.shared().clone(), cur.node, e.thread));
         if let Some(here) = here {
             let (done, total) = units();
-            if due(&here.0, (self.file, self.line), done, total) {
+            // With a total the threads of a pool report one run; without
+            // one each thread's loop is a run of its own.
+            let thread = if total > 0 { u32::MAX } else { here.2 };
+            if due(&here.0, (self.file, self.line, thread), done, total) {
                 let site = (self.level, self.module, self.file, self.line);
                 emit(here, site, || Kind::Progress {
                     done,

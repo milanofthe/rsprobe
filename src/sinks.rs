@@ -22,6 +22,17 @@ pub trait Sink: Send + Sync {
     }
 }
 
+/// A shared sink: a host keeps one handle and gives the context another.
+impl<S: Sink + ?Sized> Sink for Arc<S> {
+    fn event(&self, event: &Event, path: &Path) {
+        (**self).event(event, path)
+    }
+
+    fn every(&self) -> bool {
+        (**self).every()
+    }
+}
+
 /// The path of a node: `Display` writes the scope names from the root to the
 /// node, joined by `/`, and nothing for the root. Writing it locks the
 /// context's tree.
