@@ -60,7 +60,7 @@ pool.run(|| {
 
 A worker keeps the context it entered through a handle until it enters another one or ends, so the next task of the same context writes nothing shared with other threads; a dropped context's tree is freed when the last worker holding it moves on. `rsprobe::active!(DEBUG)` says whether a site at that level would record on this thread, so a caller reads a clock for a `time!` value only then.
 
-Messages are events at the current node, at the level of their macro; the text is formatted only when the site is active. A context is built with a threshold, filters per module and its sinks; scopes and messages of a module switch together. Events at WARN and above go into the record once per site and text, with a count.
+Messages are events at the current node, at the level of their macro; the text is formatted only when the site is active and a sink, the stream or the record takes the event. A context is built with a threshold, filters per module and its sinks; scopes and messages of a module switch together. Events at WARN and above go into the record once per site and text, with a count.
 
 ```rust
 let ctx = rsprobe::Context::builder()
@@ -69,9 +69,20 @@ let ctx = rsprobe::Context::builder()
     .sink(rsprobe::Stderr::default())
     .build();
 let _on = ctx.enter();
-rsprobe::debug!("pivot growth {:.2e}", g); // "debug factor: pivot growth 1.00e3"
-rsprobe::progress!(step, steps);           // one line, rewritten on a terminal
+rsprobe::debug!("pivot growth {:.2e}", g);
+rsprobe::progress!(step, steps);
 ```
+
+`Stderr` writes one line per event: seconds since the context was built, level, path of the node, text. On a terminal a line is set in the style of its level (ERROR red, WARN yellow, DEBUG and TRACE dim; not with `NO_COLOR` set) and progress is one line rewritten in place.
+
+```
+   0.000036 info  transient: 4 steps, 2000 unknowns
+   0.000051 debug transient/step/newton/iteration: residual 1.0e-4
+   0.000131 warn  transient/step/newton/factor: small pivot 3.2e-14 in column 417
+   0.000140 info  transient/step: 3/4
+```
+
+The threshold says what is recorded, a sink's level what it is shown: `.sink_at(Level::WARN, Stderr::default())` under a threshold of INFO keeps the scopes, so a warning is shown with its path, without the INFO messages. A sink runs on the emitting thread, so the time it takes is part of the scope the event is emitted in.
 
 A host that must not be called from worker threads (a Python interpreter, a wasm host) attaches a `Buffer` and drains it on its own thread:
 
@@ -79,7 +90,7 @@ A host that must not be called from worker threads (a Python interpreter, a wasm
 let buffer = rsprobe::Buffer::default();
 let ctx = rsprobe::Context::builder().sink(buffer.clone()).build();
 // ... the solve, on any threads ...
-buffer.drain(|event, path| host_log(event.level.name(), path, &event.kind.to_string()));
+buffer.drain(|event, path| host_log(&event.line(&path).to_string())); // the line of `Stderr`
 ```
 
 With the feature `log`, `rsprobe::Logger` turns records of the `log` facade into events at the current node, and the sink `rsprobe::LogSink` passes events on to `log`.

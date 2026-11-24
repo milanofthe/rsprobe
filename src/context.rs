@@ -61,6 +61,8 @@ pub(crate) struct Shared {
     /// Set when the [`Context`] drops.
     pub(crate) closed: AtomicBool,
     pub(crate) cfg: Builder,
+    /// The clock when the context was built.
+    pub(crate) start: u64,
     pub(crate) tree: Mutex<Tree>,
     pub(crate) warnings: Mutex<Warnings>,
     pub(crate) stream: Option<Mutex<Stream>>,
@@ -146,7 +148,7 @@ pub struct Builder {
     threshold: Level,
     filters: Vec<(String, Level)>,
     pub(crate) clock: Clock,
-    pub(crate) sinks: Vec<Box<dyn Sink>>,
+    pub(crate) sinks: Vec<(Level, Box<dyn Sink>)>,
     stream: bool,
 }
 
@@ -173,8 +175,15 @@ impl Builder {
     }
 
     /// Adds a sink that receives every event of the context.
-    pub fn sink(mut self, sink: impl Sink + 'static) -> Builder {
-        self.sinks.push(Box::new(sink));
+    pub fn sink(self, sink: impl Sink + 'static) -> Builder {
+        self.sink_at(Level::TRACE, sink)
+    }
+
+    /// Adds a sink that receives the events up to `level`: with the
+    /// threshold at INFO and a terminal sink at WARN the scopes are recorded
+    /// and a warning is shown with its path, without the INFO messages.
+    pub fn sink_at(mut self, level: Level, sink: impl Sink + 'static) -> Builder {
+        self.sinks.push((level, Box::new(sink)));
         self
     }
 
@@ -196,6 +205,7 @@ impl Builder {
             id,
             closed: AtomicBool::new(false),
             stream: self.stream.then(Mutex::default),
+            start: (self.clock)(),
             cfg: self,
             tree: Mutex::new(Tree {
                 keys: vec![(NONE, NONE)],
@@ -291,8 +301,9 @@ impl Context {
     /// and the Firefox Profiler: per thread an "M" event, per guard span an
     /// "X" event named by its scope (`root` for the root) with its node and the
     /// node's parent, per event an "i" event, per `add!` a "C" event. Times in
-    /// microseconds of the context's clock. Includes what this thread has recorded so far and what other
-    /// threads have recorded up to the drop of their outermost guard. Empty
+    /// microseconds since the context was built. Includes what this thread has
+    /// recorded so far and what other threads have recorded up to the drop of
+    /// their outermost guard. Empty
     /// without [`Builder::stream`].
     pub fn trace(&self) -> String {
         let Some(stream) = &self.shared.stream else {
@@ -305,7 +316,7 @@ impl Context {
         });
         let (s, t, r) = (lock(stream), lock(&self.shared.tree), registry());
         let parent = |n: u32| Some(t.keys[n as usize].0).filter(|&p| p != NONE);
-        s.write(|n| t.name(&r, n), parent, |m| r.name(m))
+        s.write(self.shared.start, |n| t.name(&r, n), parent, |m| r.name(m))
     }
 
     /// [`record`](Self::record) with the given calibration constants, and

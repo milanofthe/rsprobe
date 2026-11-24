@@ -4,7 +4,7 @@ use crate::alloc::quiet;
 use crate::context::Shared;
 use crate::sinks::Path;
 use crate::site::lock;
-use crate::{Level, Site};
+use crate::{Level, Sink, Site};
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
@@ -45,7 +45,7 @@ pub struct Event {
     pub file: &'static str,
     /// Line of the call site.
     pub line: u32,
-    /// The context's clock when the event was emitted, in ns.
+    /// Time since the context was built, in ns of its clock.
     pub time: u64,
     /// Message or progress.
     pub kind: Kind,
@@ -76,16 +76,22 @@ impl Warnings {
 /// Emits the event `kind()` at `node` of `shared` from the thread of index
 /// `thread`; `kind` is called outside the thread-local state. The event is
 /// kept among the warnings if its level is WARN or above, in the stream if
-/// there is one, and passed to every sink. Its allocations, and those of the
-/// sinks, are not counted by [`Alloc`](crate::Alloc).
+/// there is one, and passed to every sink of its level; with none of the
+/// three `kind` is not called. Its allocations, and those of the sinks, are
+/// not counted by [`Alloc`](crate::Alloc).
 pub(crate) fn emit(
     (shared, node, thread): (Arc<Shared>, u32, u32),
     (level, module, file, line): (Level, &'static str, &'static str, u32),
     kind: impl FnOnce() -> Kind,
 ) {
+    let shown = |s: &&(Level, Box<dyn Sink>)| level <= s.0;
+    if level > Level::WARN && shared.stream.is_none() && !shared.cfg.sinks.iter().any(|s| shown(&s))
+    {
+        return;
+    }
     quiet(|| {
         let kind = kind();
-        let time = (shared.cfg.clock)();
+        let time = (shared.cfg.clock)() - shared.start;
         let e = Event {
             node,
             level,
@@ -105,8 +111,8 @@ pub(crate) fn emit(
             shared: &shared,
             node,
         };
-        for s in &shared.cfg.sinks {
-            s.event(&e, &path);
+        for s in shared.cfg.sinks.iter().filter(shown) {
+            s.1.event(&e, &path);
         }
     })
 }

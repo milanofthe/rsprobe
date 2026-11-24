@@ -39,9 +39,11 @@ impl Stream {
     /// The Chrome trace event JSON: one "M" event per thread, "X" per span
     /// with its node and the node's parent (`null` at the root), "i" per
     /// event, "C" per `add!` (one series per node and thread). `name` names a
-    /// node, `parent` gives its parent, `measure` names an `add!` site.
+    /// node, `parent` gives its parent, `measure` names an `add!` site. Times
+    /// are written since `origin`.
     pub(crate) fn write(
         &self,
+        origin: u64,
         name: impl Fn(u32) -> &'static str,
         parent: impl Fn(u32) -> Option<u32>,
         measure: impl Fn(u32) -> &'static str,
@@ -67,7 +69,7 @@ impl Stream {
                 format_args!(
                     "\"ph\":\"X\",\"name\":{},\"ts\":{},\"dur\":{},\"args\":{{\"node\":{node},\"parent\":{}}}",
                     Str(name(node)),
-                    Us(start),
+                    Us(start - origin),
                     Us(dur),
                     opt(parent(node))
                 ),
@@ -82,7 +84,7 @@ impl Stream {
                 format_args!(
                     "\"ph\":\"C\",\"name\":{},\"ts\":{},\"args\":{{{}:{value}}}",
                     Str(measure(site)),
-                    Us(time),
+                    Us(time - origin),
                     Str(&format!("{} {t}", name(node)))
                 ),
             ),
