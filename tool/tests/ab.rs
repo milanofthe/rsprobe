@@ -41,8 +41,10 @@ fn one_table_across_cases() {
     assert!(text.contains("round 3/3 large b"));
     let lines: Vec<&str> = text.lines().collect();
     let at = lines.iter().position(|l| l.starts_with("case")).unwrap();
-    let rows: Vec<Vec<&str>> =
-        lines[at + 1..lines.len() - 1].iter().map(|l| l.split_whitespace().collect()).collect();
+    let rows: Vec<Vec<&str>> = lines[at + 1..lines.len() - 1]
+        .iter()
+        .map(|l| l.split_whitespace().collect())
+        .collect();
     // B takes twice A's time at every size: run wall in ms, B/A 2.
     assert_eq!(rows[0][..4], ["small", "0.010", "0.020", "2.000"]);
     assert_eq!(rows[1][..4], ["large", "0.100", "0.200", "2.000"]);
@@ -77,9 +79,15 @@ fn order_rotates() {
 fn case_syntax() {
     assert_eq!(
         case("n=1000 --threads 4").unwrap(),
-        ("n".into(), vec!["1000".into(), "--threads".into(), "4".into()])
+        (
+            "n".into(),
+            vec!["1000".into(), "--threads".into(), "4".into()]
+        )
     );
-    assert_eq!(case(r#"x=a 'b c' "d \"e\"" f\ g"#).unwrap().1, ["a", "b c", "d \"e\"", "f g"]);
+    assert_eq!(
+        case(r#"x=a 'b c' "d \"e\"" f\ g"#).unwrap().1,
+        ["a", "b c", "d \"e\"", "f g"]
+    );
     assert!(case("no-equals").is_err());
 }
 

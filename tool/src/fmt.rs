@@ -22,7 +22,12 @@ pub fn g(x: f64, p: usize) -> String {
         false => s.to_string(),
     };
     match exp < -4 || exp >= p as i32 {
-        true => format!("{}e{}{:02}", strip(m), if exp < 0 { '-' } else { '+' }, exp.abs()),
+        true => format!(
+            "{}e{}{:02}",
+            strip(m),
+            if exp < 0 { '-' } else { '+' },
+            exp.abs()
+        ),
         false => strip(&format!("{:.*}", (p as i32 - 1 - exp) as usize, x)),
     }
 }

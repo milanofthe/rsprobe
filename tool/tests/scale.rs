@@ -22,13 +22,26 @@ fn series(noise: f64, sizes: &[u64]) -> Vec<Run> {
             let x = n as f64;
             let t = [100.0 * x, 10.0 * x * x.ln(), x * x / 10.0]
                 .map(|v| (v * g.draw(1.0, noise)).round() as u64);
-            let hand = Hand { params: vec![("n", Param::Num(x))], ..Hand::default() };
-            let (root, lin) =
-                ([("wall", t.iter().sum())], [("calls", 1), ("wall", t[0]), ("nonzeros", n)]);
-            let (nlogn, quad) = ([("calls", 1), ("wall", t[1])], [("calls", 1), ("wall", t[2])]);
+            let hand = Hand {
+                params: vec![("n", Param::Num(x))],
+                ..Hand::default()
+            };
+            let (root, lin) = (
+                [("wall", t.iter().sum())],
+                [("calls", 1), ("wall", t[0]), ("nonzeros", n)],
+            );
+            let (nlogn, quad) = (
+                [("calls", 1), ("wall", t[1])],
+                [("calls", 1), ("wall", t[2])],
+            );
             hand.run(
                 &format!("{n}.json"),
-                &[(&[], &root), (&["lin"], &lin), (&["nlogn"], &nlogn), (&["quad"], &quad)],
+                &[
+                    (&[], &root),
+                    (&["lin"], &lin),
+                    (&["nlogn"], &nlogn),
+                    (&["quad"], &quad),
+                ],
             )
         })
         .collect()
@@ -36,15 +49,22 @@ fn series(noise: f64, sizes: &[u64]) -> Vec<Run> {
 
 fn fit(runs: &[Run], node: &str, m: &str) -> (f64, f64, i32, f64) {
     let f = fits(runs, "n").unwrap();
-    let r = f.rows.into_iter().find(|r| path(&r.0) == node && r.1 == m).unwrap();
+    let r = f
+        .rows
+        .into_iter()
+        .find(|r| path(&r.0) == node && r.1 == m)
+        .unwrap();
     (r.2, r.3, r.4, r.5)
 }
 
 #[test]
 fn known_exponents() {
     let runs = series(0.0, &SIZES);
-    for (node, c, e, q) in [("lin", 100.0, 1.0, 0), ("nlogn", 10.0, 1.0, 1), ("quad", 0.1, 2.0, 0)]
-    {
+    for (node, c, e, q) in [
+        ("lin", 100.0, 1.0, 0),
+        ("nlogn", 10.0, 1.0, 1),
+        ("quad", 0.1, 2.0, 0),
+    ] {
         let got = fit(&runs, node, "wall");
         assert_eq!(got.2, q, "{node}");
         assert!(
@@ -71,7 +91,10 @@ fn departing_nodes_named() {
     // not a scope and not listed.
     assert_eq!(f.dominant.as_ref().map(path), Some("quad".into()));
     assert!(close(f.run.unwrap(), 2.0, 1e-3));
-    assert_eq!(f.departs.iter().map(|d| path(&d.0)).collect::<Vec<_>>(), ["lin", "nlogn"]);
+    assert_eq!(
+        f.departs.iter().map(|d| path(&d.0)).collect::<Vec<_>>(),
+        ["lin", "nlogn"]
+    );
     assert!(text(&runs, "n")
         .unwrap()
         .contains("departing by more than 0.1: lin (1.00), nlogn (1.10)"));
@@ -96,11 +119,20 @@ fn known_serial_fraction() {
     let runs: Vec<Run> = [1.0, 2.0, 4.0, 8.0]
         .iter()
         .map(|&t| {
-            let (w, b) = (wall(t).round() as u64, (t * (wall(t) - f * t1)).round() as u64);
-            let hand = Hand { params: vec![("threads", Param::Num(t))], ..Hand::default() };
+            let (w, b) = (
+                wall(t).round() as u64,
+                (t * (wall(t) - f * t1)).round() as u64,
+            );
+            let hand = Hand {
+                params: vec![("threads", Param::Num(t))],
+                ..Hand::default()
+            };
             hand.run(
                 &format!("{t}.json"),
-                &[(&[], &[("wall", w)]), (&["par"], &[("calls", 1), ("wall", w), ("busy", b)])],
+                &[
+                    (&[], &[("wall", w)]),
+                    (&["par"], &[("calls", 1), ("wall", w), ("busy", b)]),
+                ],
             )
         })
         .collect();
@@ -126,10 +158,17 @@ fn time_against_the_nodes_own_measure() {
     let runs: Vec<Run> = (0..12)
         .map(|k| {
             let mut draw = |lo: u64, hi: u64| lo + rng.below((hi - lo) as usize) as u64;
-            let (nnz, ops, n) = (draw(10_000, 1_000_000), draw(10_000, 1_000_000), draw(0, 100));
+            let (nnz, ops, n) = (
+                draw(10_000, 1_000_000),
+                draw(10_000, 1_000_000),
+                draw(0, 100),
+            );
             let o = draw(100_000, 10_000_000);
             let f = (3.0 * nnz as f64 * g.draw(1.0, 0.02)).round() as u64;
-            let hand = Hand { params: vec![("n", Param::Num(n as f64))], ..Hand::default() };
+            let hand = Hand {
+                params: vec![("n", Param::Num(n as f64))],
+                ..Hand::default()
+            };
             let (factor, other) = (
                 [("calls", 1), ("wall", f), ("nonzeros", nnz)],
                 [("calls", 1), ("wall", o), ("nonzeros", ops)],
@@ -144,14 +183,30 @@ fn time_against_the_nodes_own_measure() {
         })
         .collect();
     let r = by_measure(&runs, "nonzeros");
-    let (_, _, k, _, e, q, res) =
-        r.rows.iter().find(|r| path(&r.0) == "factor" && r.1 == "wall").unwrap();
+    let (_, _, k, _, e, q, res) = r
+        .rows
+        .iter()
+        .find(|r| path(&r.0) == "factor" && r.1 == "wall")
+        .unwrap();
     assert_eq!(*k, 12);
     assert!((e + *q as f64 / 1e5f64.ln() - 1.0).abs() < 0.05);
     assert!(*res < 0.05);
-    assert_eq!(r.poor.iter().map(|p| path(&p.0)).collect::<Vec<_>>(), ["other"]);
-    let skipped: Vec<_> = r.skipped.iter().map(|s| (path(&s.0), s.1.as_str())).collect();
-    assert_eq!(skipped, [("(run)".to_string(), "absent"), ("rest".to_string(), "absent")]);
+    assert_eq!(
+        r.poor.iter().map(|p| path(&p.0)).collect::<Vec<_>>(),
+        ["other"]
+    );
+    let skipped: Vec<_> = r
+        .skipped
+        .iter()
+        .map(|s| (path(&s.0), s.1.as_str()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [
+            ("(run)".to_string(), "absent"),
+            ("rest".to_string(), "absent")
+        ]
+    );
     assert!(text_measure(&runs, "nonzeros")
         .contains("time not following nonzeros, residual above 0.25: other"));
 }
@@ -168,5 +223,8 @@ fn fewer_than_three_values_are_skipped() {
         .collect();
     let r = by_measure(&runs, "ops");
     assert!(r.rows.is_empty());
-    assert!(r.skipped.iter().any(|s| path(&s.0) == "a" && s.1 == "2 values"));
+    assert!(r
+        .skipped
+        .iter()
+        .any(|s| path(&s.0) == "a" && s.1 == "2 values"));
 }

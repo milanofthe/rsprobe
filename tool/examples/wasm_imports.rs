@@ -62,7 +62,9 @@ fn imports(b: &[u8]) -> Vec<String> {
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: wasm_imports MODULE.wasm");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: wasm_imports MODULE.wasm");
     let found = imports(&std::fs::read(&path).expect("reading the module"));
     for f in &found {
         println!("import: {f}");

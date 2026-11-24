@@ -8,7 +8,11 @@ pub fn sum(xs: impl IntoIterator<Item = f64>) -> f64 {
     let (mut s, mut c) = (0.0f64, 0.0f64);
     for x in xs {
         let t = s + x;
-        c += if s.abs() >= x.abs() { (s - t) + x } else { (x - t) + s };
+        c += if s.abs() >= x.abs() {
+            (s - t) + x
+        } else {
+            (x - t) + s
+        };
         s = t;
     }
     if c != 0.0 && c.is_finite() {
@@ -74,8 +78,13 @@ impl Rng {
 /// seed. Resamples with a median of zero in a are dropped.
 pub fn ratio_ci(a: &[f64], b: &[f64]) -> (f64, f64, f64) {
     let mut rng = Rng::new(SEED);
-    let mut resample =
-        |xs: &[f64]| median(&(0..xs.len()).map(|_| xs[rng.below(xs.len())]).collect::<Vec<_>>());
+    let mut resample = |xs: &[f64]| {
+        median(
+            &(0..xs.len())
+                .map(|_| xs[rng.below(xs.len())])
+                .collect::<Vec<_>>(),
+        )
+    };
     let mut rs = Vec::with_capacity(BOOTSTRAP);
     for _ in 0..BOOTSTRAP {
         let (ma, mb) = (resample(a), resample(b));
@@ -86,8 +95,11 @@ pub fn ratio_ci(a: &[f64], b: &[f64]) -> (f64, f64, f64) {
     rs.sort_by(|x, y| x.total_cmp(y));
     let tail = (1.0 - CONFIDENCE) / 2.0;
     let n = rs.len() as f64;
-    let at =
-        |q: f64| rs.get(((q * n) as usize).min(rs.len().max(1) - 1)).copied().unwrap_or(f64::NAN);
+    let at = |q: f64| {
+        rs.get(((q * n) as usize).min(rs.len().max(1) - 1))
+            .copied()
+            .unwrap_or(f64::NAN)
+    };
     (median(b) / median(a), at(tail), at(1.0 - tail))
 }
 
@@ -98,7 +110,11 @@ pub fn line(x: &[f64], y: &[f64]) -> (f64, f64, f64) {
     let sxx = sum(x.iter().map(|u| (u - mx) * (u - mx)));
     let b = sum(x.iter().zip(y).map(|(u, w)| (u - mx) * (w - my))) / sxx;
     let a = my - b * mx;
-    let res = sum(x.iter().zip(y).map(|(u, w)| (w - a - b * u) * (w - a - b * u))) / k;
+    let res = sum(x
+        .iter()
+        .zip(y)
+        .map(|(u, w)| (w - a - b * u) * (w - a - b * u)))
+        / k;
     (a, b, res.sqrt())
 }
 
@@ -112,7 +128,11 @@ pub fn power_fit(n: &[f64], y: &[f64]) -> (f64, f64, i32, f64) {
     for q in LOG_POWERS.into_iter().filter(|&q| q == 0 || !small) {
         let ly: Vec<f64> = match q {
             0 => y.iter().map(|w| w.ln()).collect(),
-            _ => n.iter().zip(y).map(|(u, w)| w.ln() - q as f64 * u.ln().ln()).collect(),
+            _ => n
+                .iter()
+                .zip(y)
+                .map(|(u, w)| w.ln() - q as f64 * u.ln().ln())
+                .collect(),
         };
         let (a, p, res) = line(&n.iter().map(|u| u.ln()).collect::<Vec<_>>(), &ly);
         if best.is_none_or(|b| res < b.3) {

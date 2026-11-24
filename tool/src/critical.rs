@@ -22,21 +22,38 @@ pub struct Span {
 /// The spans of a trace document.
 pub fn parse(text: &str) -> Result<Vec<Span>> {
     let doc = Json::parse(text)?;
-    let events = doc.get("traceEvents").and_then(Json::arr).ok_or("no traceEvents")?;
+    let events = doc
+        .get("traceEvents")
+        .and_then(Json::arr)
+        .ok_or("no traceEvents")?;
     let mut spans = Vec::new();
-    for e in events.iter().filter(|e| e.get("ph").and_then(Json::str) == Some("X")) {
+    for e in events
+        .iter()
+        .filter(|e| e.get("ph").and_then(Json::str) == Some("X"))
+    {
         let args = get(e, "args", Some)?;
         let parent = args
             .get("parent")
             .ok_or("a span without its node's parent, from a crate before the field")?;
-        let ns = |k| get(e, k, |x| x.f64().map(|x| (x * 1000.0).round_ties_even() as i64));
+        let ns = |k| {
+            get(e, k, |x| {
+                x.f64().map(|x| (x * 1000.0).round_ties_even() as i64)
+            })
+        };
         let (node, name, tid) = (
             get(args, "node", Json::u64)?,
             get(e, "name", Json::str)?.into(),
             get(e, "tid", Json::u64)?,
         );
         let start = ns("ts")?;
-        spans.push(Span { node, parent: parent.u64(), name, tid, start, end: start + ns("dur")? });
+        spans.push(Span {
+            node,
+            parent: parent.u64(),
+            name,
+            tid,
+            start,
+            end: start + ns("dur")?,
+        });
     }
     Ok(spans)
 }
@@ -66,7 +83,10 @@ fn paths(spans: &[Span]) -> Map<u64, Names> {
         p
     };
     let mut out = Map::default();
-    names.keys.iter().for_each(|&n| _ = out.entry(n, || path(n)));
+    names
+        .keys
+        .iter()
+        .for_each(|&n| _ = out.entry(n, || path(n)));
     out
 }
 
@@ -84,8 +104,11 @@ enum Element {
 fn chain(spans: &[Span], kids: &[usize], inst: &Span) -> Vec<Element> {
     let lo = kids.partition_point(|&k| spans[k].start < inst.start);
     let hi = kids.partition_point(|&k| spans[k].start <= inst.end);
-    let mut inside: Vec<usize> =
-        kids[lo..hi.max(lo)].iter().copied().filter(|&k| spans[k].end <= inst.end).collect();
+    let mut inside: Vec<usize> = kids[lo..hi.max(lo)]
+        .iter()
+        .copied()
+        .filter(|&k| spans[k].end <= inst.end)
+        .collect();
     inside.sort_by_key(|&k| (-spans[k].end, spans[k].start));
     let (mut t, mut out) = (inst.end, Vec::new());
     for k in inside {
@@ -193,7 +216,14 @@ pub fn critical(spans: &[Span], node: Option<&str>, depth: usize) -> Result<Vec<
                 }
             };
             let share = if dur != 0 { d as f64 / dur as f64 } else { 0.0 };
-            rows.push(Row { level, path: s.map(path), tid, start, dur: d, share });
+            rows.push(Row {
+                level,
+                path: s.map(path),
+                tid,
+                start,
+                dur: d,
+                share,
+            });
             match (s, inner.iter().any(|x| matches!(x, Element::Span(_)))) {
                 (Some(s), true) => stack.push((s, Rc::new(inner), 0, level + 1)),
                 _ => *totals.entry(path(s.unwrap_or(el)), || 0) += d,
@@ -201,7 +231,12 @@ pub fn critical(spans: &[Span], node: Option<&str>, depth: usize) -> Result<Vec<
         }
         let mut totals: Vec<(Names, i64)> = totals.keys.into_iter().zip(totals.vals).collect();
         totals.sort_by_key(|t| -t.1);
-        out.push(Critical { instance: inst.clone(), path: p, rows, totals });
+        out.push(Critical {
+            instance: inst.clone(),
+            path: p,
+            rows,
+            totals,
+        });
     }
     Ok(out)
 }
@@ -224,7 +259,11 @@ pub fn text(spans: &[Span], node: Option<&str>, depth: usize) -> Result<String> 
             "element", "start ms", "time ms", "share", "thread"
         ));
         for r in &c.rows {
-            let label = r.path.as_ref().and_then(|p| p.last()).map_or("(gap)", |s| s);
+            let label = r
+                .path
+                .as_ref()
+                .and_then(|p| p.last())
+                .map_or("(gap)", |s| s);
             let label = format!("{}{label}", "  ".repeat(r.level - 1));
             let line = format!(
                 "  {label:<36} {:>9.3} {:>9.3} {:>5.1}% {:>6}",
@@ -237,8 +276,17 @@ pub fn text(spans: &[Span], node: Option<&str>, depth: usize) -> Result<String> 
         }
         out.push("  per node over the chain (a gap counts to the element it lies in):".into());
         for (p, t) in &c.totals {
-            let share = if el != 0 { 100.0 * *t as f64 / el as f64 } else { 0.0 };
-            out.push(format!("  {:<36} {:>9} {:>9.3} {share:>5.1}%", name(p), "", *t as f64 / 1e6));
+            let share = if el != 0 {
+                100.0 * *t as f64 / el as f64
+            } else {
+                0.0
+            };
+            out.push(format!(
+                "  {:<36} {:>9} {:>9.3} {share:>5.1}%",
+                name(p),
+                "",
+                *t as f64 / 1e6
+            ));
         }
     }
     Ok(out.join("\n"))

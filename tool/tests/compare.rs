@@ -17,12 +17,20 @@ const ROUNDS: usize = 10;
 /// time.
 fn records(shift: f64, noise: f64, seed: u64, iterations: u64, extra: bool) -> Vec<Run> {
     let mut g = Gauss::new(seed);
-    let hand = Hand { noisy: vec!["wait"], ..Hand::default() };
+    let hand = Hand {
+        noisy: vec!["wait"],
+        ..Hand::default()
+    };
     (0..ROUNDS)
         .map(|k| {
             let work = (9e5 * (1.0 + shift) * g.draw(1.0, noise)).round() as u64;
             let rest = (1e5 * g.draw(1.0, noise)).round() as u64;
-            let w = [("calls", 1), ("wall", work), ("iterations", iterations), ("wait", work / 10)];
+            let w = [
+                ("calls", 1),
+                ("wall", work),
+                ("iterations", iterations),
+                ("wait", work / 10),
+            ];
             let (root, r) = ([("wall", work + rest)], [("calls", 1), ("wall", rest)]);
             let mut tree: Vec<common::Entry> = vec![(&[], &root), (&["work"], &w), (&["rest"], &r)];
             if extra {
@@ -38,13 +46,18 @@ fn set(shift: f64, noise: f64, seed: u64) -> Vec<Run> {
 }
 
 fn verdict(c: &Comparison, node: &str, x: &str) -> &'static str {
-    let n =
-        c.noisy.iter().find(|n| n.measure == x && n.path.iter().map(|s| s.0).eq(node.split('/')));
+    let n = c
+        .noisy
+        .iter()
+        .find(|n| n.measure == x && n.path.iter().map(|s| s.0).eq(node.split('/')));
     n.unwrap().verdict
 }
 
 fn gated(c: &Comparison) -> Vec<(String, &str)> {
-    c.gate.iter().map(|(p, x)| (rsprobe_tool::fmt::path(p), *x)).collect()
+    c.gate
+        .iter()
+        .map(|(p, x)| (rsprobe_tool::fmt::path(p), *x))
+        .collect()
 }
 
 #[test]
@@ -103,7 +116,10 @@ fn aa_band() {
     // 1 percent noise (about 2 percent wide), and inside one of sets at 5
     // percent (about 6 percent).
     let b5 = set(0.05, 0.01, 6);
-    assert_eq!(verdict(&compare(&a, &b5, Some(&aa), &GATE), "work", "wall"), "slower");
+    assert_eq!(
+        verdict(&compare(&a, &b5, Some(&aa), &GATE), "work", "wall"),
+        "slower"
+    );
     let (n, n2) = (set(0.0, 0.05, 7), set(0.0, 0.05, 8));
     let c = compare(&n, &b5, Some(&n2), &GATE);
     assert_eq!(verdict(&c, "work", "wall"), "within noise");
@@ -111,9 +127,17 @@ fn aa_band() {
 
 #[test]
 fn exact_difference_is_always_reported() {
-    let c = compare(&set(0.0, 0.05, 3), &records(0.0, 0.05, 4, 11, false), None, &GATE);
-    let exact: Vec<_> =
-        c.exact.iter().map(|(p, m, a, b)| (rsprobe_tool::fmt::path(p), *m, *a, *b)).collect();
+    let c = compare(
+        &set(0.0, 0.05, 3),
+        &records(0.0, 0.05, 4, 11, false),
+        None,
+        &GATE,
+    );
+    let exact: Vec<_> = c
+        .exact
+        .iter()
+        .map(|(p, m, a, b)| (rsprobe_tool::fmt::path(p), *m, *a, *b))
+        .collect();
     assert_eq!(exact, [("work".to_string(), "iterations", 10.0, 11.0)]);
     assert!(text(&c).contains("iterations   10 -> 11"));
 }
@@ -122,8 +146,16 @@ fn exact_difference_is_always_reported() {
 fn difference_within_a_set() {
     let mut a = set(0.0, 0.01, 1);
     let mut r = a[3].record.clone();
-    let work = r.nodes.iter_mut().find(|n| n.values.iter().any(|v| v.0 == "iterations")).unwrap();
-    work.values.iter_mut().find(|v| v.0 == "iterations").unwrap().1 = 12;
+    let work = r
+        .nodes
+        .iter_mut()
+        .find(|n| n.values.iter().any(|v| v.0 == "iterations"))
+        .unwrap();
+    work.values
+        .iter_mut()
+        .find(|v| v.0 == "iterations")
+        .unwrap()
+        .1 = 12;
     a[3] = Run::new("03.json", r);
     let c = compare(&a, &set(0.0, 0.01, 2), None, &GATE);
     let nd: Vec<_> = c
@@ -131,15 +163,27 @@ fn difference_within_a_set() {
         .iter()
         .map(|(p, m, s, v)| (rsprobe_tool::fmt::path(p), *m, *s, v.clone()))
         .collect();
-    assert_eq!(nd, [("work".to_string(), "iterations", "A", vec![10.0, 12.0])]);
+    assert_eq!(
+        nd,
+        [("work".to_string(), "iterations", "A", vec![10.0, 12.0])]
+    );
     assert!(c.exact.is_empty());
     assert!(text(&c).contains("differs within A: 10 12"));
 }
 
 #[test]
 fn structure_change() {
-    let c = compare(&set(0.0, 0.01, 1), &records(0.0, 0.01, 2, 10, true), None, &GATE);
-    let s: Vec<_> = c.structure.iter().map(|(p, s)| (rsprobe_tool::fmt::path(p), *s)).collect();
+    let c = compare(
+        &set(0.0, 0.01, 1),
+        &records(0.0, 0.01, 2, 10, true),
+        None,
+        &GATE,
+    );
+    let s: Vec<_> = c
+        .structure
+        .iter()
+        .map(|(p, s)| (rsprobe_tool::fmt::path(p), *s))
+        .collect();
     assert_eq!(s, [("new".to_string(), "B")]);
 }
 
@@ -152,8 +196,10 @@ fn busy_alone_does_not_fail_the_default_gate() {
         (0..ROUNDS)
             .map(|k| {
                 let p = [("calls", 1), ("wall", draw(1e6)), ("busy", draw(busy))];
-                common::Hand::default()
-                    .run(&format!("{k:02}.json"), &[(&[], &[("wall", draw(1e6))]), (&["pool"], &p)])
+                common::Hand::default().run(
+                    &format!("{k:02}.json"),
+                    &[(&[], &[("wall", draw(1e6))]), (&["pool"], &p)],
+                )
             })
             .collect::<Vec<_>>()
     };
@@ -170,7 +216,12 @@ fn busy_alone_does_not_fail_the_default_gate() {
 
 #[test]
 fn too_few_rounds() {
-    let c = compare(&set(0.0, 0.01, 1)[..2], &set(0.5, 0.01, 2)[..2], None, &GATE);
+    let c = compare(
+        &set(0.0, 0.01, 1)[..2],
+        &set(0.5, 0.01, 2)[..2],
+        None,
+        &GATE,
+    );
     assert_eq!(verdict(&c, "work", "wall"), "too few rounds");
     assert!(c.gate.is_empty());
 }

@@ -35,13 +35,27 @@ fn near(a: f64, b: f64) {
 const NODES: common::Tree = &[
     (&[], &[("wall", 10000)]),
     (&["solve"], &[("calls", 2), ("wall", 8000)]),
-    (&["solve", "it"], &[("calls", 10), ("wall", 5000), ("iterations", 10)]),
-    (&["par"], &[("calls", 1), ("wall", 1000), ("busy", 3600), ("wait", 198)]),
-    (&["par", "task"], &[("calls", 4), ("busy", 3500), ("nnz", 700)]),
+    (
+        &["solve", "it"],
+        &[("calls", 10), ("wall", 5000), ("iterations", 10)],
+    ),
+    (
+        &["par"],
+        &[("calls", 1), ("wall", 1000), ("busy", 3600), ("wait", 198)],
+    ),
+    (
+        &["par", "task"],
+        &[("calls", 4), ("busy", 3500), ("nnz", 700)],
+    ),
 ];
 
 fn calibrated(noisy: Vec<&'static str>) -> Hand {
-    Hand { inner: 10.0, outer: 5.0, noisy, ..Hand::default() }
+    Hand {
+        inner: 10.0,
+        outer: 5.0,
+        noisy,
+        ..Hand::default()
+    }
 }
 
 fn nodes() -> Vec<Run> {
@@ -68,7 +82,11 @@ fn correction_and_shares() {
     let (rows, run) = report::rows(&nodes(), &[], true);
     for (p, [wall, busy, own, share]) in expected {
         let r = row(&rows, p);
-        assert_eq!([r.v.get("wall"), r.v.get("busy"), r.v.get("self")], [wall, busy, own], "{p:?}");
+        assert_eq!(
+            [r.v.get("wall"), r.v.get("busy"), r.v.get("self")],
+            [wall, busy, own],
+            "{p:?}"
+        );
         near(r.share, share);
     }
     assert_eq!((run.get("wall"), run.get("busy")), (9805.0, 3540.0));
@@ -83,8 +101,14 @@ fn correction_and_shares() {
 fn ratios_per_unit_and_share() {
     let runs = nodes();
     let (rows, _) = report::rows(&runs, &[], true);
-    assert_eq!(ratios(row(&rows, &["solve", "it"])), [("ns/iterations", 490.0)]);
-    assert_eq!(ratios(row(&rows, &["par", "task"])), [("ns/nnz", 3460.0 / 700.0)]);
+    assert_eq!(
+        ratios(row(&rows, &["solve", "it"])),
+        [("ns/iterations", 490.0)]
+    );
+    assert_eq!(
+        ratios(row(&rows, &["par", "task"])),
+        [("ns/nnz", 3460.0 / 700.0)]
+    );
     // a noisy measure is a time: its share of the node's, not per unit
     assert_eq!(
         ratios(row(&rows, &["par"])),
@@ -105,8 +129,18 @@ fn records_are_summed() {
 
 #[test]
 fn mark_above_the_stated_share() {
-    let runs = [Hand { inner: 3.0, outer: 2.0, ..Hand::default() }
-        .run("t.json", &[(&[], &[("wall", 1000)]), (&["tiny"], &[("calls", 10), ("wall", 200)])])];
+    let runs = [Hand {
+        inner: 3.0,
+        outer: 2.0,
+        ..Hand::default()
+    }
+    .run(
+        "t.json",
+        &[
+            (&[], &[("wall", 1000)]),
+            (&["tiny"], &[("calls", 10), ("wall", 200)]),
+        ],
+    )];
     // Scope cost 10*3 of 200 = 15 percent, above the 10 percent mark.
     assert!(line(&report::text(&runs, &[], false), "  tiny").contains("15.0%!"));
 }
@@ -125,10 +159,19 @@ fn folded_and_rows() {
     let folded = report::folded(&runs);
     assert_eq!(
         folded.lines().collect::<Vec<_>>(),
-        ["run 985", "run;solve 2930", "run;solve;it 4900", "run;par 990", "run;par;task 3460"]
+        [
+            "run 985",
+            "run;solve 2930",
+            "run;solve;it 4900",
+            "run;par 990",
+            "run;par;task 3460"
+        ]
     );
     let (rows, _) = report::rows(&runs, &[], false);
-    assert_eq!(rows[2].measures().copied().collect::<Vec<_>>(), [("iterations", 10.0)]);
+    assert_eq!(
+        rows[2].measures().copied().collect::<Vec<_>>(),
+        [("iterations", 10.0)]
+    );
 }
 
 #[test]
@@ -139,7 +182,11 @@ fn schema_is_checked_and_the_reader_reads_what_the_crate_writes() {
         ("tol".into(), Param::Num(1e-9)),
         ("case".into(), "a\"\u{e9}".into()),
     ];
-    r.per_thread = vec![ThreadNodes { index: 0, handle: false, nodes: r.nodes.clone() }];
+    r.per_thread = vec![ThreadNodes {
+        index: 0,
+        handle: false,
+        nodes: r.nodes.clone(),
+    }];
     let event = Event {
         node: 1,
         level: Level::WARN,
@@ -156,15 +203,21 @@ fn schema_is_checked_and_the_reader_reads_what_the_crate_writes() {
 }
 
 fn solve_in(module: &'static str) -> Run {
-    let mut r = common::Hand::default()
-        .record(&[(&[], &[("wall", 100)]), (&["solve"], &[("calls", 1), ("wall", 60)])]);
+    let mut r = common::Hand::default().record(&[
+        (&[], &[("wall", 100)]),
+        (&["solve"], &[("calls", 1), ("wall", 60)]),
+    ]);
     r.sites[0].1 = Box::leak(Box::new(Site::new("solve", module, "f", 1, Level::INFO)));
     Run::new("s.json", r)
 }
 
 #[test]
 fn siblings_match_by_module_and_name() {
-    let runs = [solve_in("lib::direct"), solve_in("lib::iterative"), solve_in("lib::direct")];
+    let runs = [
+        solve_in("lib::direct"),
+        solve_in("lib::iterative"),
+        solve_in("lib::direct"),
+    ];
     let (rows, _) = report::rows(&runs, &[], true);
     let mut solves: Vec<(&str, f64)> = rows
         .iter()
@@ -177,13 +230,23 @@ fn siblings_match_by_module_and_name() {
 
 #[test]
 fn sites_of_one_module_and_name_are_one_node() {
-    let mut r = common::Hand::default()
-        .record(&[(&[], &[("wall", 100)]), (&["solve"], &[("calls", 1), ("wall", 30)])]);
-    r.sites.push((7, Box::leak(Box::new(Site::new("solve", "m", "f", 9, Level::INFO)))));
-    r.nodes.push(Node { site: Some(7), ..r.nodes[1].clone() });
+    let mut r = common::Hand::default().record(&[
+        (&[], &[("wall", 100)]),
+        (&["solve"], &[("calls", 1), ("wall", 30)]),
+    ]);
+    r.sites.push((
+        7,
+        Box::leak(Box::new(Site::new("solve", "m", "f", 9, Level::INFO))),
+    ));
+    r.nodes.push(Node {
+        site: Some(7),
+        ..r.nodes[1].clone()
+    });
     let (rows, _) = report::rows(&[Run::new("s.json", r)], &[], true);
-    let got: Vec<(Vec<&str>, f64)> =
-        rows.iter().map(|r| (names(&r.path), r.v.get("calls"))).collect();
+    let got: Vec<(Vec<&str>, f64)> = rows
+        .iter()
+        .map(|r| (names(&r.path), r.v.get("calls")))
+        .collect();
     assert_eq!(got, [(vec![], 0.0), (vec!["solve"], 2.0)]);
 }
 
@@ -216,7 +279,10 @@ fn warnings_after_the_tree() {
         .collect();
     let text = report::text(&runs, &[], false);
     let lines: Vec<&str> = text.lines().collect();
-    let at = lines.iter().position(|l| *l == "warnings, summed:").unwrap();
+    let at = lines
+        .iter()
+        .position(|l| *l == "warnings, summed:")
+        .unwrap();
     assert!(at > lines.iter().rposition(|l| l.starts_with("    it")).unwrap());
     // The first three words and the rest of the line.
     let split = |l: &'static str| {
@@ -240,7 +306,10 @@ fn warnings_after_the_tree() {
     ];
     assert_eq!(rows, expected);
     let (w, dropped) = report::warnings(&runs);
-    assert_eq!((w[0].0[0].0, w[0].1, w[0].2.as_str(), w[0].3), ("solve", "warn", "pivot small", 6));
+    assert_eq!(
+        (w[0].0[0].0, w[0].1, w[0].2.as_str(), w[0].3),
+        ("solve", "warn", "pivot small", 6)
+    );
     assert_eq!(dropped, 3);
 }
 
@@ -251,8 +320,14 @@ fn the_warning_column_fits_the_longest_node() {
         (&["transient"], &[("calls", 1)]),
         (&["transient", "step"], &[("calls", 1)]),
         (&["transient", "step", "newton"], &[("calls", 1)]),
-        (&["transient", "step", "newton", "iteration"], &[("calls", 1)]),
-        (&["transient", "step", "newton", "iteration", "factor"], &[("calls", 1)]),
+        (
+            &["transient", "step", "newton", "iteration"],
+            &[("calls", 1)],
+        ),
+        (
+            &["transient", "step", "newton", "iteration", "factor"],
+            &[("calls", 1)],
+        ),
     ];
     let mut r = Hand::default().record(tree);
     let e = Event {
@@ -266,7 +341,11 @@ fn the_warning_column_fits_the_longest_node() {
     };
     r.warnings = vec![(e.clone(), 1), (Event { node: 0, ..e }, 1)];
     let text = report::text(&[Run::new("w.json", r)], &[], false);
-    let rows: Vec<&str> = text.lines().skip_while(|l| *l != "warnings:").skip(1).collect();
+    let rows: Vec<&str> = text
+        .lines()
+        .skip_while(|l| *l != "warnings:")
+        .skip(1)
+        .collect();
     assert_eq!(rows[0].find("level"), rows[1].find("warn"));
     assert_eq!(rows[1].find("warn"), rows[2].find("warn"));
     assert!(rows[1].ends_with("transient/step/newton/iteration/factor warn   small pivot"));
@@ -284,8 +363,14 @@ const WORKERS: common::Tree = &[
     (&[], &[("wall", 10000)]),
     (&["par"], &[("calls", 1), ("wall", 3000), ("busy", 40000)]),
     (&["par", "outer"], &[("calls", 4), ("busy", 38000)]),
-    (&["sec"], &[("calls", 1), ("wall", 2000), ("width", 8), ("sections", 2)]),
-    (&["sec", "task"], &[("calls", 100), ("busy", 30000), ("nnz", 600)]),
+    (
+        &["sec"],
+        &[("calls", 1), ("wall", 2000), ("width", 8), ("sections", 2)],
+    ),
+    (
+        &["sec", "task"],
+        &[("calls", 100), ("busy", 30000), ("nnz", 600)],
+    ),
 ];
 
 fn workers() -> Vec<Run> {
@@ -311,7 +396,11 @@ fn a_measure_without_time_is_not_corrected() {
     let (rows, run) = report::rows(&workers(), &[], true);
     for (p, v) in expected {
         let r = row(&rows, p);
-        assert_eq!([r.v.get("wall"), r.v.get("busy"), r.v.get("self")], v, "{p:?}");
+        assert_eq!(
+            [r.v.get("wall"), r.v.get("busy"), r.v.get("self")],
+            v,
+            "{p:?}"
+        );
     }
     assert_eq!((run.get("wall"), run.get("busy")), (9970.0, 39940.0));
     near(row(&rows, &["sec", "task"]).share, 29000.0 / 39940.0);
@@ -330,12 +419,18 @@ fn ns_per_unit_only_where_the_time_is_the_nodes_own() {
     let (rows, _) = report::rows(&workers(), &[], true);
     // sec waits for tasks timed in busy: no ns/width, no ns/sections
     assert_eq!(ratios(row(&rows, &["sec"])), []);
-    assert_eq!(ratios(row(&rows, &["sec", "task"])), [("ns/nnz", 29000.0 / 600.0)]);
+    assert_eq!(
+        ratios(row(&rows, &["sec", "task"])),
+        [("ns/nnz", 29000.0 / 600.0)]
+    );
 }
 
 #[test]
 fn asked_ratios() {
-    let asked = [asked_ratio("width/sections").unwrap(), asked_ratio("busy/nnz").unwrap()];
+    let asked = [
+        asked_ratio("width/sections").unwrap(),
+        asked_ratio("busy/nnz").unwrap(),
+    ];
     let runs = workers();
     let (rows, _) = report::rows(&runs, &asked, true);
     assert_eq!(ratios(row(&rows, &["sec"])), [("width/sections", 4.0)]);
@@ -350,12 +445,28 @@ fn asked_ratios() {
 // Three rounds of one run: wall varies, nnz is exact and equal, iterations
 // differ in one round, peak is a level. No scope cost.
 fn rounds() -> Vec<Run> {
-    let hand = Hand { maxima: vec!["peak"], ..Hand::default() };
-    let round = |k, w, it, pk| {
-        let solve = [("calls", 1), ("wall", w), ("nnz", 50), ("iterations", it), ("peak", pk)];
-        hand.run(&format!("r{k}.json"), &[(&[], &[("wall", 1000)]), (&["solve"], &solve)])
+    let hand = Hand {
+        maxima: vec!["peak"],
+        ..Hand::default()
     };
-    vec![round(0, 400, 7, 300), round(1, 600, 7, 900), round(2, 500, 8, 600)]
+    let round = |k, w, it, pk| {
+        let solve = [
+            ("calls", 1),
+            ("wall", w),
+            ("nnz", 50),
+            ("iterations", it),
+            ("peak", pk),
+        ];
+        hand.run(
+            &format!("r{k}.json"),
+            &[(&[], &[("wall", 1000)]), (&["solve"], &solve)],
+        )
+    };
+    vec![
+        round(0, 400, 7, 300),
+        round(1, 600, 7, 900),
+        round(2, 500, 8, 600),
+    ]
 }
 
 #[test]
@@ -371,11 +482,18 @@ fn medians_with_the_range() {
     spread.sort_by_key(|s| s.0);
     assert_eq!(
         spread,
-        [("iterations", (7.0, 8.0)), ("self", (400.0, 600.0)), ("wall", (400.0, 600.0))]
+        [
+            ("iterations", (7.0, 8.0)),
+            ("self", (400.0, 600.0)),
+            ("wall", (400.0, 600.0))
+        ]
     );
     near(r.share, 0.5);
     // a level has no time per unit
-    assert_eq!(ratios(r), [("ns/nnz", 10.0), ("ns/iterations", 500.0 / 7.0)]);
+    assert_eq!(
+        ratios(r),
+        [("ns/nnz", 10.0), ("ns/iterations", 500.0 / 7.0)]
+    );
 }
 
 #[test]
@@ -383,9 +501,13 @@ fn median_text() {
     let out = report::text(&rounds(), &[], false);
     assert!(out.contains("3 records, median over records."));
     let l = line(&out, "  solve");
-    for part in
-        ["wall [0.000..0.001]", "nnz=50,", "iterations=7..8 differs", "peak max 900", "50.0%"]
-    {
+    for part in [
+        "wall [0.000..0.001]",
+        "nnz=50,",
+        "iterations=7..8 differs",
+        "peak max 900",
+        "50.0%",
+    ] {
         assert!(l.contains(part), "{part} in {l}");
     }
     assert!(!l.contains("ns/peak"));
@@ -409,18 +531,27 @@ fn sum_restores_the_sums() {
 
 #[test]
 fn max_is_merged_by_maximum() {
-    let hand = Hand { maxima: vec!["peak"], ..Hand::default() };
+    let hand = Hand {
+        maxima: vec!["peak"],
+        ..Hand::default()
+    };
     let rec = |file, peak| {
         hand.run(
             file,
             &[
                 (&[], &[("wall", 100)]),
-                (&["solve"], &[("calls", 1), ("wall", 50), ("peak", peak), ("nnz", 10)]),
+                (
+                    &["solve"],
+                    &[("calls", 1), ("wall", 50), ("peak", peak), ("nnz", 10)],
+                ),
             ],
         )
     };
     let runs = [rec("a.json", 300), rec("b.json", 700)];
-    assert_eq!(runs[0].kind("max").into_iter().collect::<Vec<_>>(), ["peak"]);
+    assert_eq!(
+        runs[0].kind("max").into_iter().collect::<Vec<_>>(),
+        ["peak"]
+    );
     let (nodes, _) = report::summary(&runs);
     let solve = nodes.get(&vec![("solve", "m")]).unwrap();
     assert_eq!((solve.get("peak"), solve.get("nnz")), (700.0, 20.0));
@@ -433,29 +564,55 @@ fn with_threads(threads: bool) -> Run {
     let tree: common::Tree = &[
         (&[], &[("wall", 5000)]),
         (&["par"], &[("calls", 1), ("wall", 4000), ("busy", 4000)]),
-        (&["par", "task"], &[("calls", 3), ("busy", 3800), ("allocs", 6), ("peak", 640)]),
+        (
+            &["par", "task"],
+            &[("calls", 3), ("busy", 3800), ("allocs", 6), ("peak", 640)],
+        ),
     ];
-    let mut r = Hand { maxima: vec!["peak"], ..Hand::default() }.record(tree);
+    let mut r = Hand {
+        maxima: vec!["peak"],
+        ..Hand::default()
+    }
+    .record(tree);
     let thread = |index, handle, values: [&[(&'static str, u64)]; 3]| {
         let nodes = r
             .nodes
             .iter()
             .zip(values)
-            .map(|(n, v)| Node { values: v.to_vec(), ..n.clone() })
+            .map(|(n, v)| Node {
+                values: v.to_vec(),
+                ..n.clone()
+            })
             .collect();
-        ThreadNodes { index, handle, nodes }
+        ThreadNodes {
+            index,
+            handle,
+            nodes,
+        }
     };
     let per_thread = vec![
-        thread(0, false, [&[("wall", 5000)], &[("calls", 1), ("wall", 4000)], &[]]),
+        thread(
+            0,
+            false,
+            [&[("wall", 5000)], &[("calls", 1), ("wall", 4000)], &[]],
+        ),
         thread(
             1,
             true,
-            [&[], &[("busy", 3000)], &[("calls", 2), ("busy", 2900), ("allocs", 4), ("peak", 640)]],
+            [
+                &[],
+                &[("busy", 3000)],
+                &[("calls", 2), ("busy", 2900), ("allocs", 4), ("peak", 640)],
+            ],
         ),
         thread(
             2,
             true,
-            [&[], &[("busy", 1000)], &[("calls", 1), ("busy", 900), ("allocs", 2), ("peak", 320)]],
+            [
+                &[],
+                &[("busy", 1000)],
+                &[("calls", 1), ("busy", 900), ("allocs", 2), ("peak", 320)],
+            ],
         ),
     ];
     if threads {
@@ -469,7 +626,10 @@ fn threads_at_a_node() {
     let out = report::threads(&[with_threads(true)], Some("par/task")).unwrap();
     let lines: Vec<&str> = out.lines().collect();
     assert!(lines[0].ends_with("3 threads, recorded values (scope cost not subtracted)"));
-    let rows: Vec<Vec<&str>> = lines[2..].iter().map(|l| l.split_whitespace().collect()).collect();
+    let rows: Vec<Vec<&str>> = lines[2..]
+        .iter()
+        .map(|l| l.split_whitespace().collect())
+        .collect();
     assert_eq!(
         rows,
         [
@@ -486,7 +646,18 @@ fn threads_at_a_node() {
                 "max",
                 "640"
             ],
-            vec!["2", "handle", "1", "0.000", "0.001", "0.474", "allocs=2,", "peak", "max", "320"]
+            vec![
+                "2",
+                "handle",
+                "1",
+                "0.000",
+                "0.001",
+                "0.474",
+                "allocs=2,",
+                "peak",
+                "max",
+                "320"
+            ]
         ]
     );
 }
@@ -494,8 +665,11 @@ fn threads_at_a_node() {
 #[test]
 fn threads_of_the_tree() {
     let out = report::threads(&[with_threads(true)], None).unwrap();
-    let rows: Vec<Vec<&str>> =
-        out.lines().skip(2).map(|l| l.split_whitespace().take(3).collect()).collect();
+    let rows: Vec<Vec<&str>> = out
+        .lines()
+        .skip(2)
+        .map(|l| l.split_whitespace().take(3).collect())
+        .collect();
     let expected = [
         ["(run)", "0", "context"],
         ["par", "0", "context"],

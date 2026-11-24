@@ -16,7 +16,10 @@ pub enum Json {
 impl Json {
     /// The value of a document.
     pub fn parse(text: &str) -> Result<Json> {
-        let mut p = Parser { b: text.as_bytes(), i: 0 };
+        let mut p = Parser {
+            b: text.as_bytes(),
+            i: 0,
+        };
         let v = p.value()?;
         p.ws();
         if p.i < p.b.len() {
@@ -40,7 +43,9 @@ impl Json {
     pub fn u64(&self) -> Option<u64> {
         let Json::Num(t) = self else { return None };
         let x = self.f64()?;
-        t.parse().ok().or((x >= 0.0 && x.fract() == 0.0 && x < 1.8e19).then_some(x as u64))
+        t.parse()
+            .ok()
+            .or((x >= 0.0 && x.fract() == 0.0 && x < 1.8e19).then_some(x as u64))
     }
 
     /// A string.
@@ -121,9 +126,11 @@ impl Parser<'_> {
         if self.eat("[") {
             return self.list("]", Self::value).map(Json::Arr);
         }
-        for (word, v) in
-            [("null", Json::Null), ("true", Json::Bool(true)), ("false", Json::Bool(false))]
-        {
+        for (word, v) in [
+            ("null", Json::Null),
+            ("true", Json::Bool(true)),
+            ("false", Json::Bool(false)),
+        ] {
             if self.eat(word) {
                 return Ok(v);
             }
@@ -132,11 +139,16 @@ impl Parser<'_> {
             return self.string().map(Json::Str);
         }
         let start = self.i;
-        while matches!(self.b.get(self.i), Some(b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')) {
+        while matches!(
+            self.b.get(self.i),
+            Some(b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
+        ) {
             self.i += 1;
         }
         let t = std::str::from_utf8(&self.b[start..self.i]).unwrap_or("");
-        t.parse::<f64>().map(|_| Json::Num(t.into())).map_err(|_| self.err("expected a value"))
+        t.parse::<f64>()
+            .map(|_| Json::Num(t.into()))
+            .map_err(|_| self.err("expected a value"))
     }
 
     fn string(&mut self) -> Result<String> {
@@ -145,11 +157,17 @@ impl Parser<'_> {
         }
         let mut out = Vec::new();
         loop {
-            let c = *self.b.get(self.i).ok_or_else(|| self.err("unterminated string"))?;
+            let c = *self
+                .b
+                .get(self.i)
+                .ok_or_else(|| self.err("unterminated string"))?;
             self.i += 1;
             let e = match c {
                 b'"' => return String::from_utf8(out).map_err(|_| self.err("invalid UTF-8")),
-                b'\\' => *self.b.get(self.i).ok_or_else(|| self.err("unterminated string"))?,
+                b'\\' => *self
+                    .b
+                    .get(self.i)
+                    .ok_or_else(|| self.err("unterminated string"))?,
                 c => {
                     out.push(c);
                     continue;
@@ -184,8 +202,10 @@ impl Parser<'_> {
         if (0xd800..0xdc00).contains(&u) && self.b[self.i..].starts_with(b"\\u") {
             self.i += 2;
             let low = hex(self)?;
-            return Ok(char::from_u32(0x10000 + ((u - 0xd800) << 10) + (low & 0x3ff))
-                .unwrap_or('\u{fffd}'));
+            return Ok(
+                char::from_u32(0x10000 + ((u - 0xd800) << 10) + (low & 0x3ff))
+                    .unwrap_or('\u{fffd}'),
+            );
         }
         Ok(char::from_u32(u).unwrap_or('\u{fffd}'))
     }
