@@ -129,7 +129,7 @@ pub fn run(
                 let t = Instant::now();
                 let status = Command::new(all[0])
                     .args(&all[1..])
-                    .env("RSPROBE_RECORD", &path)
+                    .env(rsprobe::RECORD_ENV, &path)
                     .status();
                 match status {
                     Ok(s) if s.success() => {}
@@ -137,7 +137,7 @@ pub fn run(
                     Err(e) => return Err(format!("{line}: {e}")),
                 }
                 if !path.exists() {
-                    return Err(format!("{line} wrote no record to RSPROBE_RECORD"));
+                    return Err(format!("{line} wrote no record to {}", rsprobe::RECORD_ENV));
                 }
                 let case = if c.is_empty() {
                     String::new()

@@ -158,3 +158,35 @@ fn peak_is_the_high_water_mark_above_the_entry_level() {
     assert!(r.max.contains(&"peak"));
     assert_eq!(json(&r)["measures"]["peak"], "max");
 }
+
+#[test]
+fn level_names_and_the_path_of_a_node() {
+    use rsprobe::Level;
+    assert_eq!("debug".parse(), Ok(Level::DEBUG));
+    assert_eq!(" WARN ".parse(), Ok(Level::WARN));
+    assert_eq!("off".parse(), Ok(Level::OFF));
+    assert!("status"
+        .parse::<Level>()
+        .unwrap_err()
+        .contains("off, error, warn"));
+    for l in Level::ALL {
+        assert_eq!(l.name().parse(), Ok(l));
+    }
+    let ctx = rsprobe::Context::builder().threshold(Level::OFF).build();
+    {
+        let _on = ctx.enter();
+        let _s = rsprobe::scope!("not recorded");
+    }
+    assert_eq!(ctx.record().nodes.len(), 1);
+    let ctx = rsprobe::Context::new();
+    {
+        let _on = ctx.enter();
+        let _a = rsprobe::scope!("a");
+        let _b = rsprobe::scope!("b");
+    }
+    let r = ctx.record();
+    let b = r.find(&["a", "b"]).unwrap();
+    let names: Vec<_> = r.path(b).iter().map(|s| s.name).collect();
+    assert_eq!(names, ["a", "b"]);
+    assert!(r.path(0).is_empty());
+}

@@ -101,6 +101,10 @@ pub use site::{Level, Site};
 /// Version of the record's JSON layout: 2 adds the measure kind `max`.
 const SCHEMA: u32 = 2;
 
+/// The environment variable that names the file a program writes its record
+/// to ([`Record::save`]).
+pub const RECORD_ENV: &str = "RSPROBE_RECORD";
+
 /// Calibration: empty scopes timed after a pass of the same count that warms
 /// the caches. A scope costs 45 ns with the default clock (examples/bench.rs
 /// on a Ryzen 9 9900X under Linux and on an Apple M3), so a pass takes about

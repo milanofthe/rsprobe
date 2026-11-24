@@ -190,9 +190,9 @@ pub struct Run {
 impl Run {
     /// The record `record` named `file`, a path or any label.
     pub fn new(file: impl Into<String>, record: Record) -> Run {
-        let mut memo = vec![None; record.nodes.len()];
-        let paths = (0..record.nodes.len())
-            .map(|i| path(&record, i, &mut memo))
+        let scope = |s: &&'static rsprobe::Site| (s.name, s.module);
+        let paths = (0..record.nodes.len() as u32)
+            .map(|i| record.path(i).iter().map(scope).collect())
             .collect();
         let mut run = Run {
             file: file.into(),
@@ -255,24 +255,6 @@ impl Run {
         w.map(|(e, c)| (at(e.node), e.level.name(), e.kind.to_string(), *c))
             .collect()
     }
-}
-
-fn path(r: &Record, i: usize, memo: &mut Vec<Option<Path>>) -> Path {
-    if let Some(p) = &memo[i] {
-        return p.clone();
-    }
-    let n = &r.nodes[i];
-    let p = match n.parent {
-        None => Path::new(),
-        Some(up) => {
-            let mut p = path(r, up as usize, memo);
-            let site = r.sites.iter().find(|s| Some(s.0) == n.site);
-            p.push(site.map_or(("?", ""), |s| (s.1.name, s.1.module)));
-            p
-        }
-    };
-    memo[i] = Some(p.clone());
-    p
 }
 
 /// The union over runs of a set of each.

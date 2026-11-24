@@ -112,6 +112,29 @@ pub struct Record {
 }
 
 impl Record {
+    /// The sites of the scopes from the root to the node, the node's own
+    /// last; empty for the root. The inverse of [`find`](Self::find) by
+    /// their names.
+    pub fn path(&self, node: u32) -> Vec<&'static Site> {
+        let site = |n: &Node| self.sites.iter().find(|s| Some(s.0) == n.site).map(|s| s.1);
+        let up = |n: &u32| self.nodes[*n as usize].parent;
+        let mut path: Vec<_> = std::iter::successors(Some(node), up)
+            .filter_map(|n| site(&self.nodes[n as usize]))
+            .collect();
+        path.reverse();
+        path
+    }
+
+    /// Writes the record as JSON to the file the environment variable
+    /// [`RECORD_ENV`](crate::RECORD_ENV) names, where it is set (the tool's
+    /// `ab` sets it per run); whether it was.
+    pub fn save(&self) -> std::io::Result<bool> {
+        match std::env::var_os(crate::RECORD_ENV) {
+            Some(path) => std::fs::write(path, self.to_string()).map(|_| true),
+            None => Ok(false),
+        }
+    }
+
     /// The id of the node reached from the root through scopes of these
     /// names.
     pub fn find(&self, path: &[&str]) -> Option<u32> {

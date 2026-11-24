@@ -10,6 +10,9 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 pub struct Level(pub(crate) u8);
 
 impl Level {
+    /// Below every site of the macros: as a threshold nothing is active, as
+    /// the level of a sink nothing is shown.
+    pub const OFF: Level = Level(0);
     /// Errors.
     pub const ERROR: Level = Level(1);
     /// Warnings.
@@ -21,9 +24,33 @@ impl Level {
     /// Finest scopes, per iteration.
     pub const TRACE: Level = Level(5);
 
+    /// The levels from OFF to TRACE.
+    pub const ALL: [Level; 6] = [
+        Level::OFF,
+        Level::ERROR,
+        Level::WARN,
+        Level::INFO,
+        Level::DEBUG,
+        Level::TRACE,
+    ];
+
     /// Lower-case name, as written in the record.
     pub fn name(self) -> &'static str {
         ["off", "error", "warn", "info", "debug", "trace"][self.0 as usize]
+    }
+}
+
+impl std::str::FromStr for Level {
+    type Err = String;
+
+    /// The level of a [`name`](Level::name), in any case: what a host reads
+    /// from an environment variable, a project file or its own API.
+    fn from_str(name: &str) -> Result<Level, String> {
+        let known = |l: &Level| l.name().eq_ignore_ascii_case(name.trim());
+        Level::ALL.into_iter().find(known).ok_or_else(|| {
+            let names = Level::ALL.map(Level::name).join(", ");
+            format!("unknown level '{name}' ({names})")
+        })
     }
 }
 
