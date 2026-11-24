@@ -4,6 +4,7 @@ use crate::alloc::quiet;
 use crate::context::Shared;
 use crate::sinks::Path;
 use crate::site::lock;
+use crate::thread::with_current;
 use crate::{Level, Sink, Site};
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
@@ -60,16 +61,34 @@ pub(crate) struct Warnings {
 
 impl Warnings {
     /// Counts `e` with an earlier event of the same site and text, or keeps
-    /// it while fewer than [`WARNINGS`](crate::WARNINGS) are kept.
-    fn add(&mut self, e: &Event) {
+    /// it while fewer than [`WARNINGS`](crate::WARNINGS) are kept. Returns
+    /// what the sinks are to be told: nothing at the first event of a site
+    /// and text, the count when it reaches a power of ten, and the number of
+    /// events not kept when that reaches one; `None` for the events between,
+    /// which the sinks do not get.
+    fn add(&mut self, e: &Event) -> Option<String> {
         let same =
             |k: &Event| (k.file, k.line, k.module, &k.kind) == (e.file, e.line, e.module, &e.kind);
         let full = self.kept.len() >= crate::WARNINGS;
-        match self.kept.iter_mut().find(|k| same(&k.0)) {
-            Some(k) => k.1 += 1,
-            None if full => self.dropped += 1,
-            None => self.kept.push((e.clone(), 1)),
-        }
+        let (n, kept) = match self.kept.iter_mut().find(|k| same(&k.0)) {
+            Some(k) => {
+                k.1 += 1;
+                (k.1, true)
+            }
+            None if full => {
+                self.dropped += 1;
+                (self.dropped, false)
+            }
+            None => {
+                self.kept.push((e.clone(), 1));
+                (1, true)
+            }
+        };
+        (10u64.pow(n.ilog10()) == n).then(|| match (kept, n) {
+            (true, 1) => String::new(),
+            (true, _) => format!(" ({n} times)"),
+            (false, _) => format!(" (not kept, {n} beyond {} distinct)", crate::WARNINGS),
+        })
     }
 }
 
@@ -77,8 +96,11 @@ impl Warnings {
 /// `thread`; `kind` is called outside the thread-local state. The event is
 /// kept among the warnings if its level is WARN or above, in the stream if
 /// there is one, and passed to every sink of its level; with none of the
-/// three `kind` is not called. Its allocations, and those of the sinks, are
-/// not counted by [`Alloc`](crate::Alloc).
+/// three `kind` is not called. Of the events at WARN and above with the same
+/// site and text the sinks get the first, the tenth, the hundredth and so
+/// on, with the count appended. Its allocations, and those of the sinks, are
+/// not counted by [`Alloc`](crate::Alloc); its time is the measure `emit` of
+/// the node and not part of the spans open on this thread.
 pub(crate) fn emit(
     (shared, node, thread): (Arc<Shared>, u32, u32),
     (level, module, file, line): (Level, &'static str, &'static str, u32),
@@ -90,30 +112,39 @@ pub(crate) fn emit(
         return;
     }
     quiet(|| {
-        let kind = kind();
-        let time = (shared.cfg.clock)() - shared.start;
-        let e = Event {
+        let clock = shared.cfg.clock;
+        let begin = clock();
+        let mut e = Event {
             node,
             level,
             module,
             file,
             line,
-            time,
-            kind,
+            time: begin - shared.start,
+            kind: kind(),
         };
         if let Some(s) = &shared.stream {
             lock(s).events.push((thread, e.clone()));
         }
-        if e.level <= Level::WARN && matches!(e.kind, Kind::Message(_)) {
-            lock(&shared.warnings).add(&e);
-        }
-        let path = Path {
-            shared: &shared,
-            node,
+        let repeat = match (level <= Level::WARN, &e.kind) {
+            (true, Kind::Message(_)) => lock(&shared.warnings).add(&e),
+            _ => Some(String::new()),
         };
-        for s in shared.cfg.sinks.iter().filter(shown) {
-            s.1.event(&e, &path);
+        if let Some(repeat) = repeat {
+            if let Kind::Message(text) = &mut e.kind {
+                text.push_str(&repeat);
+            }
+            let path = Path {
+                shared: &shared,
+                node,
+            };
+            for s in shared.cfg.sinks.iter().filter(shown) {
+                s.1.event(&e, &path);
+            }
         }
+        let ns = clock() - begin;
+        with_current(|_, e| e.out += ns);
+        crate::time!(ERROR, "emit", ns);
     })
 }
 

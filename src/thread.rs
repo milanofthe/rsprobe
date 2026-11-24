@@ -54,6 +54,9 @@ pub(crate) struct Entry {
     /// [`Handle::enter`] alive on this thread.
     pub(crate) depth: u32,
     pub(crate) clock: Clock,
+    /// Time this thread spent emitting events of the context, in ns: taken
+    /// out of the spans open meanwhile.
+    pub(crate) out: u64,
     /// By site id: 0 undecided, 1 inactive, 2 active in this context.
     active: Vec<u8>,
     /// Index of this thread among those that entered the context.
@@ -213,6 +216,7 @@ impl Thread {
             live: None,
             depth: 0,
             clock: shared.cfg.clock,
+            out: 0,
             active: Vec::new(),
             thread: lock(&shared.tree).thread(busy),
             stream: shared.stream.is_some(),

@@ -82,7 +82,9 @@ rsprobe::progress!(step, steps);
    0.000140 info  transient/step: 3/4
 ```
 
-The threshold says what is recorded, a sink's level what it is shown: `.sink_at(Level::WARN, Stderr::default())` under a threshold of INFO keeps the scopes, so a warning is shown with its path, without the INFO messages. A sink runs on the emitting thread, so the time it takes is part of the scope the event is emitted in.
+The threshold says what is recorded, a sink's level what it is shown: `.sink_at(Level::WARN, Stderr::default())` under a threshold of INFO keeps the scopes, so a warning is shown with its path, without the INFO messages.
+
+Formatting and the sinks run on the emitting thread. Their time is the noisy measure `emit` of the event's node and is taken out of `wall` and `busy` of the scopes open on that thread, so a profile does not change with the amount of output; the trace keeps the spans as the clock gave them. Of the events at WARN and above with the same site and text, the sinks get the first, the tenth, the hundredth and so on, with the count appended (`small pivot (10 times)`); the record has every count.
 
 A host that must not be called from worker threads (a Python interpreter, a wasm host) attaches a `Buffer` and drains it on its own thread:
 

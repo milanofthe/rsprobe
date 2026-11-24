@@ -163,6 +163,37 @@ fn a_sink_takes_events_up_to_its_level_as_stamped_lines() {
 }
 
 #[test]
+fn sinks_get_a_repeated_warning_at_powers_of_ten() {
+    let buffer = Buffer::default();
+    let ctx = Context::builder().sink(buffer.clone()).build();
+    let _on = ctx.enter();
+    for _ in 0..12 {
+        warn!("repeated");
+        info!("each time");
+    }
+    for i in 0..111 {
+        warn!("distinct {i}");
+    }
+    let texts: Vec<String> = drained(&buffer).into_iter().map(|e| e.1).collect();
+    assert_eq!(texts.iter().filter(|t| *t == "each time").count(), 12);
+    let repeated: Vec<_> = texts.iter().filter(|t| t.starts_with("repeated")).collect();
+    assert_eq!(repeated, ["repeated", "repeated (10 times)"]);
+    let distinct: Vec<_> = texts.iter().filter(|t| t.starts_with("distinct")).collect();
+    assert_eq!(distinct.len(), 99 + 2);
+    assert_eq!(distinct[98], "distinct 98");
+    assert_eq!(
+        distinct[99],
+        "distinct 99 (not kept, 1 beyond 100 distinct)"
+    );
+    assert_eq!(
+        distinct[100],
+        "distinct 108 (not kept, 10 beyond 100 distinct)"
+    );
+    let r = ctx.record();
+    assert_eq!((r.warnings[0].1, r.warnings_dropped), (12, 12));
+}
+
+#[test]
 fn the_buffer_drains_in_order() {
     let buffer = Buffer::default();
     let ctx = Context::builder().sink(buffer.clone()).build();
