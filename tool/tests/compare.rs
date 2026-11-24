@@ -161,7 +161,9 @@ fn busy_alone_does_not_fail_the_default_gate() {
     let c = compare(&a, &b, None, &GATE);
     assert_eq!(verdict(&c, "pool", "busy"), "slower");
     assert!(c.gate.is_empty());
-    assert!(text(&c).contains("gate rule: fails where a node of at least 5% of the run is slower beyond the band in wall;"));
+    assert!(
+        text(&c).contains("gate rule: fails where a node of at least 5% of the run is slower beyond the band in wall;")
+    );
     let c = compare(&a, &b, None, &["wall", "busy"]);
     assert_eq!(gated(&c), [("pool".to_string(), "busy")]);
 }

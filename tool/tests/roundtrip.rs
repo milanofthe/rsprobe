@@ -137,9 +137,10 @@ fn critical_path_of_the_pairs() {
         .iter()
         .filter(|r| r.path.as_ref().is_some_and(|p| p.join("/") == "pairs/task"))
         .collect();
-    // the tasks run concurrently: the chain holds the one ending last
-    assert_eq!(tasks.len(), 1);
-    assert_ne!(tasks[0].tid, Some(0));
+    // the chain's tasks follow one another, on workers: the one ending last
+    // where the tasks ran concurrently, more where a task started late
+    assert!(!tasks.is_empty() && tasks.windows(2).all(|w| w[0].start + w[0].dur <= w[1].start));
+    assert!(tasks.iter().all(|t| t.tid != Some(0)));
     let elapsed = c.instance.end - c.instance.start;
     assert_eq!(c.rows.iter().filter(|r| r.level == 1).map(|r| r.dur).sum::<i64>(), elapsed);
     assert_eq!(c.totals.iter().map(|t| t.1).sum::<i64>(), elapsed);

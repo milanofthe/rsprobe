@@ -25,44 +25,40 @@ struct Args {
 }
 
 impl Args {
-    /// Parses `argv` against the flags, the options with a value and those
-    /// with an optional value (`--name` alone or followed by a word not
-    /// starting with '-'). After `--`, and with `rest` after the first
-    /// positional, everything is positional.
-    fn parse(
-        argv: &[String],
-        flags: &[&str],
-        valued: &[&str],
-        optional: &[&str],
-        rest: bool,
-    ) -> Result<Args> {
+    /// Parses `argv` against the options in `spec`: `--name` a flag,
+    /// `--name=` with a value, `--name?` with an optional value (a following
+    /// word not starting with '-'). After `--`, and with `rest` from the first
+    /// positional on, everything is positional.
+    fn parse(argv: &[String], spec: &[&str], rest: bool) -> Result<Args> {
         let mut a = Args { pos: Vec::new(), opts: Vec::new() };
         let mut it = argv.iter().peekable();
         while let Some(x) = it.next() {
             if x == "--" || (rest && !x.starts_with("--")) {
-                a.pos.extend((x != "--").then(|| x.clone()));
-                a.pos.extend(it.cloned());
-                break;
-            }
-            if !x.starts_with("--") {
+                a.pos
+                    .extend((x != "--").then(|| x.clone()).into_iter().chain(it.by_ref().cloned()));
+            } else if !x.starts_with("--") {
                 a.pos.push(x.clone());
-                continue;
+            } else {
+                let (k, v) =
+                    x.split_once('=').map_or((x.as_str(), None), |(k, v)| (k, Some(v.to_string())));
+                let has = |suffix: &str| spec.contains(&format!("{k}{suffix}").as_str());
+                let next =
+                    |it: &mut std::iter::Peekable<std::slice::Iter<String>>, any: bool| match it
+                        .peek()
+                    {
+                        Some(n) if any || !n.starts_with('-') => it.next().cloned(),
+                        _ => None,
+                    };
+                let v = match () {
+                    _ if has("") && v.is_none() => String::new(),
+                    _ if has("=") => v
+                        .or_else(|| next(&mut it, true))
+                        .ok_or(format!("argument {k}: expected one argument"))?,
+                    _ if has("?") => v.or_else(|| next(&mut it, false)).unwrap_or_default(),
+                    _ => return Err(format!("unrecognized arguments: {x}")),
+                };
+                a.opts.push((k.to_string(), v));
             }
-            let (k, v) =
-                x.split_once('=').map_or((x.as_str(), None), |(k, v)| (k, Some(v.to_string())));
-            let v = match () {
-                _ if flags.contains(&k) && v.is_none() => String::new(),
-                _ if valued.contains(&k) => match v.or_else(|| it.next().cloned()) {
-                    Some(v) => v,
-                    None => return Err(format!("argument {k}: expected one argument")),
-                },
-                _ if optional.contains(&k) => v.unwrap_or_else(|| match it.peek() {
-                    Some(n) if !n.starts_with('-') => it.next().cloned().unwrap_or_default(),
-                    _ => String::new(),
-                }),
-                _ => return Err(format!("unrecognized arguments: {x}")),
-            };
-            a.opts.push((k.to_string(), v));
         }
         Ok(a)
     }
@@ -75,13 +71,17 @@ impl Args {
         self.all(k).pop()
     }
 
-    fn has(&self, k: &str) -> bool {
-        self.one(k).is_some()
+    /// The option's value as an integer, `default` without it.
+    fn int(&self, k: &str, default: Option<usize>) -> Result<usize> {
+        match self.one(k) {
+            Some(v) => v.parse().map_err(|_| format!("argument {k}: invalid int value: '{v}'")),
+            None => default.ok_or(format!("the following arguments are required: {k}")),
+        }
     }
 
     /// At most one of the options.
     fn exclusive(&self, ks: &[&str]) -> Result<()> {
-        match ks.iter().filter(|k| self.has(k)).collect::<Vec<_>>()[..] {
+        match ks.iter().filter(|k| self.one(k).is_some()).collect::<Vec<_>>()[..] {
             [a, b, ..] => Err(format!("argument {b}: not allowed with argument {a}")),
             _ => Ok(()),
         }
@@ -101,93 +101,83 @@ fn run(argv: &[String]) -> Result<i32> {
         println!("{USAGE}");
         return Ok(if help { 0 } else { 2 });
     };
-    let (sets, by_case) = match cmd.as_str() {
+    let out = match cmd.as_str() {
         "report" => {
             let a = Args::parse(
                 argv,
-                &["--folded", "--json", "--sum"],
-                &["--ratio"],
-                &["--threads"],
+                &["--folded", "--json", "--sum", "--ratio=", "--threads?"],
                 false,
             )?;
             a.exclusive(&["--folded", "--json", "--threads"])?;
-            let asked = a
-                .all("--ratio")
-                .into_iter()
-                .map(report::asked_ratio)
-                .collect::<Result<Vec<_>>>()?;
-            let runs = a.records()?;
-            let out = match (a.has("--folded"), a.one("--threads")) {
-                (true, _) => report::folded(&runs),
-                (_, Some(t)) => report::threads(&runs, Some(t).filter(|t| !t.is_empty()))?,
-                _ if a.has("--json") => report::json(&runs, &asked, a.has("--sum")),
-                _ => report::text(&runs, &asked, a.has("--sum")),
-            };
-            println!("{out}");
-            return Ok(0);
+            let asked: Vec<_> =
+                a.all("--ratio").into_iter().map(report::asked_ratio).collect::<Result<_>>()?;
+            let (runs, sum) = (a.records()?, a.one("--sum").is_some());
+            match (a.one("--folded"), a.one("--threads"), a.one("--json")) {
+                (Some(_), _, _) => report::folded(&runs),
+                (_, Some(t), _) => report::threads(&runs, Some(t).filter(|t| !t.is_empty()))?,
+                (_, _, Some(_)) => report::json(&runs, &asked, sum),
+                _ => report::text(&runs, &asked, sum),
+            }
         }
         "scale" => {
-            let a = Args::parse(argv, &["--threads"], &["--by", "--by-measure"], &[], false)?;
+            let a = Args::parse(argv, &["--threads", "--by=", "--by-measure="], false)?;
             a.exclusive(&["--by", "--by-measure"])?;
             let runs = a.records()?;
-            let out = match (a.one("--by"), a.one("--by-measure")) {
-                (_, Some(_)) if a.has("--threads") => return Err("--threads takes --by".into()),
-                (_, Some(m)) => scale::text_measure(&runs, m),
-                (Some(by), _) if a.has("--threads") => scale::text_threads(&runs, by)?,
-                (Some(by), _) => scale::text(&runs, by)?,
+            match (a.one("--by"), a.one("--by-measure"), a.one("--threads").is_some()) {
+                (_, Some(_), true) => return Err("--threads takes --by".into()),
+                (_, Some(m), _) => scale::text_measure(&runs, m),
+                (Some(by), _, true) => scale::text_threads(&runs, by)?,
+                (Some(by), _, _) => scale::text(&runs, by)?,
                 _ => return Err("one of the arguments --by --by-measure is required".into()),
-            };
-            println!("{out}");
-            return Ok(0);
+            }
         }
         "critical" => {
-            let a = Args::parse(argv, &[], &["--node", "--depth"], &[], false)?;
-            let [trace] = &a.pos[..] else {
-                return Err("expected one trace".into());
-            };
-            let depth = match a.one("--depth") {
-                Some(d) => {
-                    d.parse().map_err(|_| format!("argument --depth: invalid int value: '{d}'"))?
-                }
-                None => CRITICAL_DEPTH,
-            };
-            println!("{}", critical::text(&critical::load(trace)?, a.one("--node"), depth)?);
-            return Ok(0);
+            let a = Args::parse(argv, &["--node=", "--depth="], false)?;
+            let [trace] = &a.pos[..] else { return Err("expected one trace".into()) };
+            critical::text(
+                &critical::load(trace)?,
+                a.one("--node"),
+                a.int("--depth", Some(CRITICAL_DEPTH))?,
+            )?
         }
-        "compare" => {
-            let a = Args::parse(argv, &[], &["--aa", "--gate"], &[], false)?;
-            let [x, y] = &a.pos[..] else {
-                return Err("expected the sets A and B".into());
-            };
-            let sets = (x.into(), y.into(), a.one("--aa").map(Into::into));
-            (vec![(String::new(), sets)], a)
-        }
-        "ab" => {
-            let a = Args::parse(
-                argv,
-                &["--aa"],
-                &["--rounds", "--out", "--case", "--gate"],
-                &[],
-                true,
-            )?;
-            let rounds =
-                a.one("--rounds").ok_or("the following arguments are required: --rounds")?;
-            let rounds = rounds
-                .parse()
-                .map_err(|_| format!("argument --rounds: invalid int value: '{rounds}'"))?;
-            let cases = a.all("--case").into_iter().map(ab::case).collect::<Result<Vec<_>>>()?;
-            (ab::run(rounds, &a.pos, a.has("--aa"), a.one("--out"), &cases)?, a)
-        }
+        "compare" | "ab" => return gate(cmd == "ab", argv),
         c => return Err(format!("argument command: invalid choice: '{c}'\n{USAGE}")),
     };
-    let gate: Vec<&str> = GATE.iter().copied().chain(by_case.all("--gate")).collect();
+    println!("{out}");
+    Ok(0)
+}
+
+/// `compare`, or `ab` and the comparison of its sets; 1 where the gate fails.
+fn gate(ab: bool, argv: &[String]) -> Result<i32> {
+    let (sets, a) = match ab {
+        false => {
+            let a = Args::parse(argv, &["--aa=", "--gate="], false)?;
+            let [x, y] = &a.pos[..] else { return Err("expected the sets A and B".into()) };
+            (vec![(String::new(), (x.into(), y.into(), a.one("--aa").map(Into::into)))], a)
+        }
+        true => {
+            let a =
+                Args::parse(argv, &["--aa", "--rounds=", "--out=", "--case=", "--gate="], true)?;
+            let cases: Vec<_> = a.all("--case").into_iter().map(ab::case).collect::<Result<_>>()?;
+            (
+                ab::run(
+                    a.int("--rounds", None)?,
+                    &a.pos,
+                    a.one("--aa").is_some(),
+                    a.one("--out"),
+                    &cases,
+                )?,
+                a,
+            )
+        }
+    };
+    let gate: Vec<&str> = GATE.iter().copied().chain(a.all("--gate")).collect();
     let mut cs = Vec::new();
-    for (n, (a, b, aa)) in sets {
+    for (n, (x, y, aa)) in sets {
         let aa = aa.map(|aa| load_set(&[aa])).transpose()?;
-        let c = compare::compare(&load_set(&[a])?, &load_set(&[b])?, aa.as_deref(), &gate);
-        cs.push((n, c));
+        cs.push((n, compare::compare(&load_set(&[x])?, &load_set(&[y])?, aa.as_deref(), &gate)));
     }
-    match cmd == "ab" && by_case.has("--case") {
+    match ab && !a.all("--case").is_empty() {
         true => println!("{}", compare::table(&cs)),
         false => println!("{}", compare::text(&cs[0].1)),
     }
