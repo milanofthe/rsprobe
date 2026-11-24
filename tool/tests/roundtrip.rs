@@ -5,31 +5,30 @@
 use rsprobe_tool::compare::compare;
 use rsprobe_tool::constants::GATE;
 use rsprobe_tool::fmt::path;
+use rsprobe_tool::json::Json;
 use rsprobe_tool::{critical, load_set, report, scale};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-/// The workload example, built once with the feature `on`.
+/// The workload example, built once with the feature `on`; its path as
+/// cargo reports the artifact.
 fn workload() -> &'static Path {
     static BIN: OnceLock<PathBuf> = OnceLock::new();
     BIN.get_or_init(|| {
-        let ok = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "--quiet",
-                "-p",
-                "rsprobe",
-                "--example",
-                "workload",
-                "--features",
-                "on",
-            ])
-            .status()
+        let args = "build --quiet -p rsprobe --example workload --features on";
+        let out = Command::new(env!("CARGO"))
+            .args(args.split(' '))
+            .arg("--message-format=json")
+            .output()
             .unwrap();
-        assert!(ok.success());
-        let exe = std::env::current_exe().unwrap();
-        exe.parent().unwrap().parent().unwrap().join("examples").join("workload")
+        assert!(out.status.success());
+        let messages = String::from_utf8(out.stdout).unwrap();
+        let exe = messages.lines().filter_map(|l| Json::parse(l).ok()).find_map(|m| {
+            let name = m.get("target")?.get("name")?.str()?;
+            (name == "workload").then(|| m.get("executable")?.str().map(PathBuf::from))?
+        });
+        exe.expect("cargo reports the example's executable")
     })
 }
 
