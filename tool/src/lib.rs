@@ -23,7 +23,7 @@ pub mod report;
 pub mod scale;
 pub mod stats;
 
-pub use records::{load, load_set, parse, Run};
+pub use records::{load, load_set, parse, read, Run};
 
 /// Errors as their message.
 pub type Result<T> = std::result::Result<T, String>;

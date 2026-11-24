@@ -188,14 +188,14 @@ fn structure_change() {
 }
 
 #[test]
-fn busy_alone_does_not_fail_the_default_gate() {
-    // a pool whose workers wait longer: busy 30 percent up, wall equal
+fn pool_alone_does_not_fail_the_default_gate() {
+    // a section whose workers wait longer: pool 30 percent up, wall equal
     let pool = |busy: f64, seed| {
         let mut g = Gauss::new(seed);
         let mut draw = |x: f64| (x * g.draw(1.0, 0.01)).round() as u64;
         (0..ROUNDS)
             .map(|k| {
-                let p = [("calls", 1), ("wall", draw(1e6)), ("busy", draw(busy))];
+                let p = [("calls", 1), ("wall", draw(1e6)), ("pool", draw(busy))];
                 common::Hand::default().run(
                     &format!("{k:02}.json"),
                     &[(&[], &[("wall", draw(1e6))]), (&["pool"], &p)],
@@ -205,13 +205,13 @@ fn busy_alone_does_not_fail_the_default_gate() {
     };
     let (a, b) = (pool(4e6, 1), pool(5.2e6, 2));
     let c = compare(&a, &b, None, &GATE);
-    assert_eq!(verdict(&c, "pool", "busy"), "slower");
+    assert_eq!(verdict(&c, "pool", "pool"), "slower");
     assert!(c.gate.is_empty());
     assert!(
         text(&c).contains("gate rule: fails where a node of at least 5% of the run is slower beyond the band in wall;")
     );
-    let c = compare(&a, &b, None, &["wall", "busy"]);
-    assert_eq!(gated(&c), [("pool".to_string(), "busy")]);
+    let c = compare(&a, &b, None, &["wall", "pool"]);
+    assert_eq!(gated(&c), [("pool".to_string(), "pool")]);
 }
 
 #[test]

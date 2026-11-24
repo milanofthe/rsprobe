@@ -3,8 +3,9 @@
 
 use crate::constants::{DEPARTURE, FOLLOWS, MIN_FIT_POINTS};
 use crate::fmt::{g, path};
-use crate::overhead::{corrected, domain};
+use crate::overhead::corrected;
 use crate::records::{median_nodes, preorder, union, Nodes, Path, Run, Set, Values};
+use crate::report::BUILTIN;
 use crate::stats::{karp_flatt, local_exponent, power_fit};
 use crate::Result;
 use rsprobe::Param;
@@ -52,8 +53,8 @@ fn node_fits(
     measures.iter().filter_map(fit).collect()
 }
 
-/// The fits over a run parameter n: its values, the fits per node (time in
-/// its domain, calls, the exact measures), the dominant exponent (the local
+/// The fits over a run parameter n: its values, the fits per node (time,
+/// calls, the exact user measures), the dominant exponent (the local
 /// exponent at the largest n of the node with the largest self time there),
 /// that node, and the other scopes whose local exponent departs from it by
 /// more than DEPARTURE, with theirs.
@@ -78,14 +79,14 @@ pub fn fits(runs: &[Run], by: &str) -> Result<Fits> {
         ));
     }
     let mut exact = union(runs, |r| r.kind("exact"));
-    exact.remove("calls");
+    exact.retain(|m| !BUILTIN.contains(m));
     let (mut rows, mut local) = (Vec::new(), Vec::<(Path, f64, f64)>::new());
     for p in preorder(pts.iter().flat_map(|x| &x.1.keys)) {
         let Some(vs) = pts.iter().map(|x| x.1.get(&p)).collect::<Option<Vec<_>>>() else {
             continue;
         };
         let last = vs[vs.len() - 1];
-        let time = domain(last);
+        let time = "time";
         let mut ms = vec![time, "calls"];
         ms.extend(exact.iter().filter(|m| last.has(m)));
         for (m, c, e, q, res) in node_fits(&n, &vs, &ms) {
@@ -129,13 +130,13 @@ pub struct ByMeasure {
     pub poor: Vec<(Path, f64)>,
 }
 
-/// Per node the fit of c x^p log^q(x) to its time in its domain, its calls
+/// Per node the fit of c x^p log^q(x) to its time (wall + busy), its calls
 /// and its other exact and program-added noisy measures over x, the node's
 /// own measure `unit`, one point per record that has unit at the node.
 pub fn by_measure(runs: &[Run], unit: &str) -> ByMeasure {
     let recs: Vec<Nodes> = runs.iter().map(|r| corrected(r).0).collect();
     let mut other = union(runs, |r| &r.kind("exact") | &r.kind("noisy"));
-    other.retain(|m| !["wall", "busy", "calls", unit].contains(m));
+    other.retain(|m| !BUILTIN.contains(m) && *m != unit);
     let mut out = ByMeasure::default();
     for p in preorder(recs.iter().flat_map(|n| &n.keys)) {
         let mut vs: Vec<&Values> = recs
@@ -156,7 +157,7 @@ pub fn by_measure(runs: &[Run], unit: &str) -> ByMeasure {
             out.skipped.push((p, why));
             continue;
         }
-        let time = domain(vs[vs.len() - 1]);
+        let time = "time";
         let mut ms = vec![time, "calls"];
         ms.extend(other.iter().filter(|m| vs.iter().any(|v| v.has(m))));
         for (m, c, e, q, res) in node_fits(&x, &vs, &ms) {
@@ -182,8 +183,8 @@ pub struct Threads {
 
 /// Per node timed on the calling thread and per thread count t above the
 /// smallest t0: speedup S = T(t0)/T(t), efficiency S t0/t, the Karp-Flatt
-/// serial fraction of S on t/t0, and the waiting share 1 - busy/(t wall)
-/// where the node has worker time. T is the corrected wall time.
+/// serial fraction of S on t/t0, and the waiting share 1 - pool/(t wall)
+/// where the node has tasks. T is the corrected wall time.
 pub fn threads(runs: &[Run], by: &str) -> Result<Threads> {
     let pts = points(runs, by)?;
     if pts.len() < 2 {
@@ -193,7 +194,7 @@ pub fn threads(runs: &[Run], by: &str) -> Result<Threads> {
     let mut rows = Vec::new();
     for p in preorder(&base.keys) {
         let b = &base.get(&p).cloned().unwrap_or_default();
-        if domain(b) != "wall" || b.get("wall") <= 0.0 {
+        if b.get("wall") <= 0.0 {
             continue;
         }
         for (t, nodes) in &pts[1..] {
@@ -204,7 +205,7 @@ pub fn threads(runs: &[Run], by: &str) -> Result<Threads> {
                 continue;
             };
             let s = b.get("wall") / v.get("wall");
-            let wait = (v.get("busy") > 0.0).then(|| 1.0 - v.get("busy") / (t * v.get("wall")));
+            let wait = (v.get("pool") > 0.0).then(|| 1.0 - v.get("pool") / (t * v.get("wall")));
             rows.push((
                 p.clone(),
                 *t,

@@ -178,17 +178,20 @@ pub fn children(nodes: &Nodes) -> Vec<Vec<usize>> {
 }
 
 /// A record as the commands read it: its source (a file name or a label in
-/// messages), the record and its nodes merged by path.
+/// messages), the schema it was written in, the record and its nodes merged
+/// by path.
 #[derive(Clone, Debug)]
 pub struct Run {
     pub file: String,
+    pub schema: u64,
     pub record: Record,
     pub nodes: Nodes,
     paths: Vec<Path>,
 }
 
 impl Run {
-    /// The record `record` named `file`, a path or any label.
+    /// The record `record` named `file`, a path or any label, of the current
+    /// schema.
     pub fn new(file: impl Into<String>, record: Record) -> Run {
         let scope = |s: &&'static rsprobe::Site| (s.name, s.module);
         let paths = (0..record.nodes.len() as u32)
@@ -196,6 +199,7 @@ impl Run {
             .collect();
         let mut run = Run {
             file: file.into(),
+            schema: SCHEMAS[SCHEMAS.len() - 1],
             record,
             nodes: Nodes::default(),
             paths,
@@ -319,15 +323,30 @@ fn values(v: &Json) -> Result<Vec<(&'static str, u64)>> {
     .collect()
 }
 
-/// A record from its JSON (schema 1 or 2). Names are interned and sites
-/// allocated for the life of the process, as the record's types hold them.
+/// A record from its JSON. Names are interned and sites allocated for the
+/// life of the process, as the record's types hold them.
 pub fn parse(text: &str) -> Result<Record> {
+    read("", text).map(|r| r.record)
+}
+
+/// The record `file` from its JSON, of a schema in [`SCHEMAS`]. Schema 2 has
+/// no split by kind of thread: its `busy` holds the spans of handle guards
+/// too, and `worker_calls` is taken as `calls` where `wall` is 0 and `busy`
+/// is not, the nodes that ran on workers only.
+pub fn read(file: &str, text: &str) -> Result<Run> {
     let doc = Json::parse(text)?;
     let schema = doc.get("schema").and_then(Json::u64);
-    if !schema.is_some_and(|s| SCHEMAS.contains(&s)) {
+    let Some(schema) = schema.filter(|s| SCHEMAS.contains(s)) else {
         let s = schema.map_or("None".into(), |s| s.to_string());
-        return Err(format!("record schema {s}, this tool reads (1, 2)"));
-    }
+        return Err(format!("record schema {s}, this tool reads {SCHEMAS:?}"));
+    };
+    let split = |mut values: Vec<(&'static str, u64)>| {
+        let get = |m| values.iter().find(|v| v.0 == m).map_or(0, |v| v.1);
+        if schema == 2 && get("wall") == 0 && get("busy") > 0 {
+            values.push(("worker_calls", get("calls")));
+        }
+        values
+    };
     let int = |v: &Json, k: &str| get(v, k, Json::u64);
     let params = get(&doc, "params", Json::members)?.iter().map(|(k, v)| {
         let x = match v {
@@ -376,7 +395,7 @@ pub fn parse(text: &str) -> Result<Record> {
         nodes.push(Node {
             parent,
             site,
-            values: values(v)?,
+            values: split(values(v)?),
         });
     }
     if nodes.is_empty()
@@ -398,7 +417,7 @@ pub fn parse(text: &str) -> Result<Record> {
         for n in get(t, "nodes", Json::arr)? {
             ns.get_mut(int(n, "id")? as usize)
                 .ok_or("a thread's node id")?
-                .values = values(n)?;
+                .values = split(values(n)?);
         }
         let handle = get(t, "handle", Some)? == &Json::Bool(true);
         Ok(ThreadNodes {
@@ -431,7 +450,10 @@ pub fn parse(text: &str) -> Result<Record> {
             int(w, "count")?,
         ))
     });
-    Ok(Record {
+    if schema == 2 {
+        measures.push(("worker_calls", true));
+    }
+    let record = Record {
         params: params.collect::<Result<_>>()?,
         calibration: Calibration {
             inner_ns: ns("inner_ns")?,
@@ -445,14 +467,17 @@ pub fn parse(text: &str) -> Result<Record> {
         warnings: warnings.collect::<Result<_>>()?,
         warnings_dropped: doc.get("warnings_dropped").and_then(Json::u64).unwrap_or(0),
         nodes,
-    })
+    };
+    let mut run = Run::new(file, record);
+    run.schema = schema;
+    Ok(run)
 }
 
 /// A record file.
-pub fn load(path: impl AsRef<std::path::Path>) -> Result<Record> {
+pub fn load(path: impl AsRef<std::path::Path>) -> Result<Run> {
     let p = path.as_ref();
     let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
-    parse(&text).map_err(|e| format!("{}: {e}", p.display()))
+    read(&p.display().to_string(), &text).map_err(|e| format!("{}: {e}", p.display()))
 }
 
 /// The records of a set: each argument a record file or a directory whose
@@ -480,6 +505,5 @@ pub fn load_set<A: AsRef<std::path::Path>>(args: &[A]) -> Result<Vec<Run>> {
             .collect();
         return Err(format!("no records in {}", args.join(" ")));
     }
-    let run = |f: &std::path::PathBuf| Ok(Run::new(f.display().to_string(), load(f)?));
-    files.iter().map(run).collect()
+    files.iter().map(load).collect()
 }

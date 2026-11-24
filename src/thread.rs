@@ -14,7 +14,7 @@ pub(crate) const NONE: u32 = u32::MAX;
 
 /// One thread's built-in measures of one node, in the order of
 /// [`BUILTIN`](crate::context::BUILTIN).
-pub(crate) type Base = [AtomicU64; 7];
+pub(crate) type Base = [AtomicU64; 10];
 
 /// The current node of a thread.
 #[derive(Clone, Copy)]
@@ -22,7 +22,8 @@ pub(crate) struct Cur {
     /// Index of the entry in [`Thread::entries`]; [`NONE`] for no context.
     pub(crate) entry: u32,
     pub(crate) node: u32,
-    /// Entered through a handle: time adds to `busy`, else to `wall`.
+    /// Entered through a handle: a scope adds to `worker_calls` and `busy`, a
+    /// handle guard to `tasks` and `pool`; else to `calls` and `wall`.
     pub(crate) busy: bool,
 }
 

@@ -3,16 +3,26 @@
 
 use crate::constants::OVERHEAD_MARK;
 use crate::fmt::{g, name, num};
-use crate::overhead::{corrected, cost_share, domain, share};
+use crate::overhead::{corrected, cost_share, mixed, share};
 use crate::records::{
-    children, median_nodes, preorder, total, union, Map, Nodes, Path, Run, Set, Spread, Values,
+    median_nodes, preorder, total, union, Map, Nodes, Path, Run, Set, Spread, Values,
 };
 use crate::stats::{median, sum};
 use crate::Result;
 use rsprobe::Param;
 
 /// Values of a node that are not user measures.
-pub const BUILTIN: [&str; 5] = ["calls", "wall", "busy", "self", "cost"];
+pub const BUILTIN: [&str; 9] = [
+    "calls",
+    "wall",
+    "busy",
+    "worker_calls",
+    "pool",
+    "tasks",
+    "time",
+    "self",
+    "cost",
+];
 
 /// The corrected nodes and run totals summed over the records, `max`
 /// measures by maximum.
@@ -43,15 +53,16 @@ pub fn medians(runs: &[Run]) -> (Nodes, Values, Map<Path, Spread>) {
     (nodes, run, spread)
 }
 
-/// A row of the report: the node, its values (calls, wall, busy, self, cost,
-/// then the user measures), its domain (see [`domain`]), its share of the
-/// run in that domain, the scope cost as a share of its recorded time, the
-/// ratios (see [`ratios`]) and the spread over the records.
+/// A row of the report: the node, its values (the [`BUILTIN`] ones, then the
+/// user measures), whether the split of the worker instances below it is
+/// assumed (see [`mixed`]), its time as a share of the run's thread time,
+/// the scope cost as a share of its recorded time, the ratios (see
+/// [`ratios`]) and the spread over the records.
 #[derive(Clone, Debug)]
 pub struct Row {
     pub path: Path,
     pub v: Values,
-    pub domain: &'static str,
+    pub mixed: bool,
     pub share: f64,
     pub cost_share: f64,
     pub ratios: Vec<(String, f64)>,
@@ -65,11 +76,11 @@ impl Row {
     }
 }
 
-/// Time per unit of each exact user measure (ns, in the node's domain)
-/// where the node has time of its own (`own`), each noisy one (a time) over
-/// that time, busy over wall where the node has both, and each asked (A, B)
-/// as `A/B` where B is not zero. A `max` measure is a level: no ratio unless
-/// asked.
+/// Time (wall + busy) per unit of each exact user measure in ns where the
+/// node has time of its own (`own`), each noisy one (a time) over that time,
+/// pool over wall where the node has both (the mean number of workers in its
+/// tasks), and each asked (A, B) as `A/B` where B is not zero. A `max`
+/// measure is a level: no ratio unless asked.
 pub fn ratios(
     v: &Values,
     noisy: &Set,
@@ -77,8 +88,7 @@ pub fn ratios(
     asked: &[(String, String)],
     max: &Set,
 ) -> Vec<(String, f64)> {
-    let d = domain(v);
-    let t = v.get(d);
+    let t = v.get("time");
     let mut out: Vec<(String, f64)> = Vec::new();
     let mut set = |k: String, x: f64| match out.iter_mut().find(|o| o.0 == k) {
         Some(o) => o.1 = x,
@@ -93,11 +103,11 @@ pub fn ratios(
                 set(format!("ns/{m}"), t / x);
             }
         } else if t != 0.0 {
-            set(format!("{m}/{d}"), x / t);
+            set(format!("{m}/time"), x / t);
         }
     }
-    if v.get("wall") > 0.0 && v.get("busy") > 0.0 {
-        set("busy/wall".into(), v.get("busy") / v.get("wall"));
+    if v.get("wall") > 0.0 && v.get("pool") > 0.0 {
+        set("pool/wall".into(), v.get("pool") / v.get("wall"));
     }
     for (a, b) in asked {
         if v.get(b) != 0.0 {
@@ -128,20 +138,18 @@ pub fn rows(runs: &[Run], asked: &[(String, String)], summed: bool) -> (Vec<Row>
     };
     let noisy = union(runs, |r| r.kind("noisy"));
     let max = union(runs, |r| r.kind("max"));
-    let kids = children(&nodes);
     let mut out = Vec::new();
     for p in preorder(&nodes.keys) {
-        let i = nodes.index(&p).unwrap_or_default();
-        let v = &nodes.vals[i];
-        // Time of its own: a scope with self time whose children ran in its
-        // domain, so that no part of it is waiting for work timed elsewhere.
-        let same = kids[i].iter().all(|&k| domain(&nodes.vals[k]) == domain(v));
-        let own = v.get("calls") != 0.0 && v.get("self") > 0.0 && same;
+        let v = nodes.get(&p).cloned().unwrap_or_default();
+        // Time of its own: a scope with self time and no tasks, so that no
+        // part of its work lies in the pool time of its tasks.
+        let own = v.get("calls") != 0.0 && v.get("self") > 0.0 && v.get("tasks") == 0.0;
         let mut row = Values(BUILTIN.iter().map(|&m| (m, v.get(m))).collect());
         row.0.extend(v.0.iter().filter(|m| !BUILTIN.contains(&m.0)));
+        let v = &v;
         out.push(Row {
-            domain: domain(v),
-            share: share(v, &run, None),
+            mixed: mixed(v),
+            share: share(v, &run, "time"),
             cost_share: cost_share(v),
             ratios: ratios(v, &noisy, own, asked, &max),
             spread: spread.get(&p).cloned().unwrap_or_default(),
@@ -211,26 +219,40 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
     } else {
         0.0
     };
+    let old = runs.iter().filter(|r| r.schema == 2).count();
+    let old = match old {
+        0 => String::new(),
+        n => format!(" Schema 2 in {n} of {k}: no split by kind of thread, busy includes the handle guard spans (wall + busy counts a section twice), worker_calls taken as calls where wall is 0."),
+    };
+    // The time columns any node has a value in.
+    let cols: Vec<&str> = ["wall", "busy", "pool"]
+        .into_iter()
+        .filter(|m| rs.iter().any(|r| r.v.get(m) != 0.0))
+        .collect();
+    let head: String = cols
+        .iter()
+        .map(|m| format!(" {:>10}", format!("{m} ms")))
+        .collect();
     let mut out = vec![
         format!(
-            "{k} record{}{merged}. {}",
+            "{k} record{}{merged}. {}{old}",
             if k > 1 { "s" } else { "" },
             ps.collect::<Vec<_>>().join(" ")
         ),
         format!("calibration: inner {inner:.1} ns, outer {outer:.1} ns (mean over records)"),
         format!(
-            "run: wall {:.3} ms, busy {:.3} ms, scope cost {cost:.2}% of the thread time",
+            "run: wall {:.3} ms, thread time {:.3} ms, scope cost {cost:.2}% of the thread time",
             run.get("wall") / 1e6,
-            run.get("busy") / 1e6
+            run.get("thread") / 1e6
         ),
         String::new(),
         format!(
-            "{:<28} {:>8} {:>10} {:>10} {:>10} {:>7} {:>6}  measures",
-            "node", "calls", "wall ms", "busy ms", "self ms", "share", "scope"
+            "{:<28} {:>8}{head} {:>10} {:>7} {:>6}   measures",
+            "node", "calls", "self ms", "share", "scope"
         ),
     ];
     let mut noisy = union(runs, |r| r.kind("noisy"));
-    noisy.extend(["wall", "busy"]);
+    noisy.extend(["wall", "busy", "pool", "time"]);
     let max = union(runs, |r| r.kind("max"));
     let measure = |r: &Row, m: &str, x: f64| {
         let s = r.spread.iter().find(|s| s.0 == m).map(|s| s.1);
@@ -254,39 +276,43 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
         }
     };
     for r in &rs {
-        let spread = ["calls", r.domain]
+        let spread = ["calls", "time"]
             .into_iter()
             .filter(|m| r.spread.iter().any(|s| s.0 == *m));
         let mut user: Vec<String> = spread.map(|m| measure(r, m, r.v.get(m))).collect();
         user.extend(r.measures().map(|&(m, x)| measure(r, m, x)));
         user.extend(r.ratios.iter().map(|(k, x)| format!("{k} {}", g(*x, 4))));
-        let mark = if r.cost_share > OVERHEAD_MARK {
-            "!"
-        } else {
-            " "
-        };
+        let mark = [(r.cost_share > OVERHEAD_MARK, '!'), (r.mixed, '?')];
+        let mark: String = mark.iter().map(|m| if m.0 { m.1 } else { ' ' }).collect();
+        let times: String = cols
+            .iter()
+            .map(|m| format!(" {:>10.3}", r.v.get(m) / 1e6))
+            .collect();
         let label = format!(
             "{}{}",
             "  ".repeat(r.path.len()),
             r.path.last().map_or("(run)", |s| s.0)
         );
-        out.push(format!(
-            "{label:<28} {:>8} {:>10.3} {:>10.3} {:>10.3} {:>6.1}% {:>5.1}%{mark} {}",
-            r.v.get("calls") as i64,
-            r.v.get("wall") / 1e6,
-            r.v.get("busy") / 1e6,
-            r.v.get("self") / 1e6,
-            100.0 * r.share,
-            100.0 * r.cost_share,
-            user.join(", ")
-        ));
+        out.push(
+            format!(
+                "{label:<28} {:>8}{times} {:>10.3} {:>6.1}% {:>5.1}%{mark} {}",
+                r.v.get("calls") as i64,
+                r.v.get("self") / 1e6,
+                100.0 * r.share,
+                100.0 * r.cost_share,
+                user.join(", ")
+            )
+            .trim_end()
+            .to_string(),
+        );
     }
     out.extend([
         String::new(),
-        "Times with the scope cost subtracted: X - calls inner - (scope instances below) (inner + outer).".into(),
-        "self and share in the node's own measure: wall, or busy for nodes timed only on workers (share of the run's busy).".into(),
-        format!("scope: estimated scope cost in the node's recorded time; ! above {}%.", (100.0 * OVERHEAD_MARK) as i64),
-        "ns/X: time per unit of an exact measure at scopes whose children ran in their domain; others with --ratio A/B.".into(),
+        "wall, busy: time of the node's scope instances on threads entered through the context and through a handle; pool: time of the tasks (handle guards) entered at the node; thread time: wall of the run + pool of all nodes.".into(),
+        "Scope cost subtracted, full = inner + outer: wall - (calls - worker_calls) inner - (calling-thread instances below) full; busy - worker_calls inner - (worker instances below, down to nodes with tasks) full; pool - (those instances below a node with tasks) full.".into(),
+        "time = wall + busy; self = time - wall of the children - busy of the children of a node without tasks; share: time over the thread time.".into(),
+        format!("scope: estimated scope cost in the node's recorded wall + busy; ! above {}%. ?: tasks and worker instances of its own, the worker instances below taken as run in its tasks.", (100.0 * OVERHEAD_MARK) as i64),
+        "ns/X: time per unit of an exact measure at scopes without tasks; pool/wall: mean workers in its tasks; others with --ratio A/B.".into(),
     ]);
     if k > 1 && !summed {
         out.push(
@@ -315,8 +341,8 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
     out.join("\n")
 }
 
-/// Folded stacks, one line per node with self time in ns: the flame graph's
-/// widths are thread time (wall on the calling thread, busy on workers).
+/// Folded stacks, one line per node with its self time from wall + busy in
+/// ns: the flame graph's widths are thread time in scope instances.
 pub fn folded(runs: &[Run]) -> String {
     let (nodes, _) = summary(runs);
     let lines = preorder(&nodes.keys).into_iter().filter_map(|p| {
@@ -333,8 +359,8 @@ pub fn folded(runs: &[Run]) -> String {
 }
 
 /// Per record, node (the one named by its path `a/b`, or all) and thread
-/// the recorded values of each thread, with its busy time over the mean of
-/// the threads with busy time at that node.
+/// the recorded values of each thread, with its worker time (busy + pool)
+/// over the mean of the threads with worker time at that node.
 pub fn threads(runs: &[Run], node: Option<&str>) -> Result<String> {
     let mut out = Vec::new();
     for r in runs {
@@ -361,19 +387,16 @@ pub fn threads(runs: &[Run], node: Option<&str>) -> Result<String> {
             ts.len()
         ));
         out.push(format!(
-            "{:<28} {:>6} {:<7} {:>8} {:>10} {:>10} {:>9}  measures",
-            "node", "thread", "via", "calls", "wall ms", "busy ms", "busy/mean"
+            "{:<28} {:>6} {:<7} {:>8} {:>10} {:>10} {:>10} {:>9}  measures",
+            "node", "thread", "via", "calls", "wall ms", "busy ms", "pool ms", "load"
         ));
         for p in &paths {
             let vs: Vec<_> = ts
                 .iter()
                 .filter_map(|(t, n)| n.get(p).map(|v| (t, v)))
                 .collect();
-            let busy: Vec<f64> = vs
-                .iter()
-                .map(|v| v.1.get("busy"))
-                .filter(|&b| b > 0.0)
-                .collect();
+            let work = |v: &Values| v.get("busy") + v.get("pool");
+            let busy: Vec<f64> = vs.iter().map(|v| work(v.1)).filter(|&b| b > 0.0).collect();
             let mean = if busy.is_empty() {
                 0.0
             } else {
@@ -393,14 +416,15 @@ pub fn threads(runs: &[Run], node: Option<&str>) -> Result<String> {
                             (_, true) => format!("{m} {:.3} ms", x / 1e6),
                             _ => format!("{m}={}", x as i64),
                         });
-                let b = v.get("busy");
+                let b = work(v);
                 let line = format!(
-                    "{label:<28} {:>6} {:<7} {:>8} {:>10.3} {:>10.3} {:>9}  {}",
+                    "{label:<28} {:>6} {:<7} {:>8} {:>10.3} {:>10.3} {:>10.3} {:>9}  {}",
                     t.index,
                     if t.handle { "handle" } else { "context" },
                     v.get("calls") as i64,
                     v.get("wall") / 1e6,
-                    b / 1e6,
+                    v.get("busy") / 1e6,
+                    v.get("pool") / 1e6,
                     if b != 0.0 {
                         format!("{:.3}", b / mean)
                     } else {

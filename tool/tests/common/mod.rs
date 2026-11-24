@@ -10,7 +10,7 @@ pub type Tree<'a> = &'a [Entry<'a>];
 /// A node: its path and its values.
 pub type Entry<'a> = (&'a [&'static str], &'a [(&'static str, u64)]);
 
-/// A record of the tree: wall, busy and the measures in `noisy` are noisy
+/// A record of the tree: wall, busy, pool and the measures in `noisy` are noisy
 /// (as the crate declares those added by `time!`), those in `maxima` max
 /// (`max!`), every other one exact (`add!`). Each node has calls, wall and
 /// busy, zero where not given; sites by name in module "m".
@@ -33,8 +33,12 @@ impl Hand {
         names.dedup();
         let site = |n: &str| names.iter().position(|x| *x == n).unwrap() as u32;
         let id = |p: &[&str]| paths.iter().position(|n| n.0 == p).unwrap() as u32;
-        let mut measures: Vec<(&'static str, bool)> =
-            vec![("calls", true), ("wall", false), ("busy", false)];
+        let mut measures: Vec<(&'static str, bool)> = vec![
+            ("calls", true),
+            ("wall", false),
+            ("busy", false),
+            ("pool", false),
+        ];
         measures.extend(self.noisy.iter().map(|&m| (m, false)));
         measures.extend(self.maxima.iter().map(|&m| (m, true)));
         for (_, vs) in tree {

@@ -43,7 +43,7 @@ fn max_keeps_the_largest_value_over_calls_and_threads() {
     assert_eq!(get(&r, &["compile"], "slots"), 7);
     assert!(r.max.contains(&"slots"));
     let doc = json(&r);
-    assert_eq!(doc["schema"], 2);
+    assert_eq!(doc["schema"], 3);
     assert_eq!(doc["measures"]["slots"], "max");
     assert_eq!(doc["measures"]["functions"], "exact");
 }

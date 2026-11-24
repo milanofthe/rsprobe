@@ -1,7 +1,7 @@
 //! Guards of scopes, contexts and handles, and the handle itself.
 
 use crate::alloc::{close, open, quiet, N};
-use crate::context::{Shared, BUSY, BYTES, CALLS, PEAK, WALL};
+use crate::context::{Shared, BUSY, BYTES, CALLS, PEAK, POOL, TASKS, WALL, WORKER_CALLS};
 use crate::site::{registry, MAX};
 use crate::stream::Item;
 use crate::thread::{bump, raise, with_current, Cur, Entry, Thread, IDLE, NONE, THREAD};
@@ -12,9 +12,12 @@ use std::sync::Arc;
 
 /// Guard of a scope, of [`Context::enter`](crate::Context::enter) or of
 /// [`Handle::enter`]: makes a node current on this thread and restores the
-/// previous one on drop, adding its span to `wall` (on a thread entered
-/// through the context) or `busy` (through a handle) of that node, and for a
-/// scope one call. The time this thread spent emitting events meanwhile is
+/// previous one on drop. On a thread entered through the context a scope adds
+/// one call and its span to `calls` and `wall` of its node, the guard of the
+/// context its span to `wall` of the root. On a thread entered through a
+/// handle a scope adds to `worker_calls` (part of `calls` in the record) and
+/// `busy`, the handle's guard one task and its span to `tasks` and `pool` of
+/// the handle's node. The time this thread spent emitting events meanwhile is
 /// not part of the span added; it is the measure `emit` of the event's node.
 #[must_use]
 pub struct Guard {
@@ -159,8 +162,14 @@ impl Drop for Guard {
             let span_ns = (e.clock)().saturating_sub(self.start);
             let dt = span_ns.saturating_sub(e.out - self.out);
             let b = e.base(self.cur.node);
-            bump(&b[CALLS], (self.kind == Kind::Scope) as u64);
-            bump(&b[if self.cur.busy { BUSY } else { WALL }], dt);
+            let scope = self.kind == Kind::Scope;
+            let (count, time) = match (scope, self.cur.busy) {
+                (_, false) => (CALLS, WALL),
+                (true, true) => (WORKER_CALLS, BUSY),
+                (false, true) => (TASKS, POOL),
+            };
+            bump(&b[count], (scope || self.cur.busy) as u64);
+            bump(&b[time], dt);
             for (k, &m) in mem.iter().enumerate() {
                 let op = if BYTES + k == PEAK { raise } else { bump };
                 op(&b[BYTES + k], m);
@@ -222,12 +231,13 @@ pub fn current() -> Handle {
 impl Handle {
     /// Makes this node current on this thread until the guard drops; scopes
     /// entered meanwhile hang under it. On a thread where the handle's
-    /// context is not current (a pool's worker) their time and the guard's
-    /// own span are `busy` of their nodes. Where it is current already (the
-    /// thread that issued the work runs it itself) only the node changes:
-    /// the time stays in the measure this thread records and the guard adds
-    /// no span, as an open guard of this thread covers it. Records nothing
-    /// if the context has been dropped.
+    /// context is not current (a pool's worker) their calls and time are
+    /// `worker_calls` and `busy` of their nodes, and the guard adds one task
+    /// and its span to `tasks` and `pool` of this node. Where it is current
+    /// already (the thread that issued the work runs it itself) only the node
+    /// changes: the time stays in the measure this thread records and the
+    /// guard adds no span and no task, as an open guard of this thread covers
+    /// it. Records nothing if the context has been dropped.
     ///
     /// A thread holds the context it entered through a handle after the
     /// guard drops, so entering it again writes no state shared with other

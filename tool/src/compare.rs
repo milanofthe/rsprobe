@@ -67,8 +67,9 @@ fn band(aa: Option<(&[Corrected], &[Corrected])>, p: &Path, x: &str) -> f64 {
 
 /// The comparison of record sets a and b, with aa a second set of a's build
 /// for the noise band. Noisy measures added by the program (`time!`) are
-/// compared as wall and busy are; a slower verdict fails the gate only for
-/// the measures in `gate`.
+/// compared as wall, busy and pool are; a slower verdict fails the gate only
+/// for the measures in `gate`. The share of a node is its `wall` over the
+/// run's wall time, any other measure over the run's thread time.
 pub fn compare(a: &[Run], b: &[Run], aa: Option<&[Run]>, gate: &[&str]) -> Comparison {
     let (ca, cb): (Vec<_>, Vec<_>) = (
         a.iter().map(corrected).collect(),
@@ -77,7 +78,8 @@ pub fn compare(a: &[Run], b: &[Run], aa: Option<&[Run]>, gate: &[&str]) -> Compa
     let caa: Option<Vec<_>> = aa.map(|aa| aa.iter().map(corrected).collect());
     let exact = union(a.iter().chain(b), |r| r.kind("exact"));
     let mut noisy = union(a.iter().chain(b), |r| r.kind("noisy"));
-    noisy.retain(|m| !["wall", "busy"].contains(m));
+    let timed = ["wall", "busy", "pool"];
+    noisy.retain(|m| !timed.contains(m));
     let all: Vec<&Corrected> = ca.iter().chain(&cb).collect();
     let mut out = Comparison {
         gated: gate
@@ -123,7 +125,7 @@ pub fn compare(a: &[Run], b: &[Run], aa: Option<&[Run]>, gate: &[&str]) -> Compa
                 out.exact.push((p.clone(), m, va[0], vb[0]));
             }
         }
-        let xs = ["wall", "busy"]
+        let xs = timed
             .into_iter()
             .chain(here.iter().copied().filter(|m| noisy.contains(m)));
         for x in xs {
@@ -132,11 +134,10 @@ pub fn compare(a: &[Run], b: &[Run], aa: Option<&[Run]>, gate: &[&str]) -> Compa
             if !(ma > 0.0 && mb > 0.0) {
                 continue;
             }
-            let timed = x == "wall" || x == "busy";
             let at = |n: &Nodes| n.get(&p).cloned().unwrap_or_default();
             let share = median(
                 &ca.iter()
-                    .map(|(n, run)| share(&at(n), run, timed.then_some(x)))
+                    .map(|(n, run)| share(&at(n), run, x))
                     .collect::<Vec<_>>(),
             );
             let (path, measure, ratio, verdict) = (p.clone(), x, None, "too few rounds");

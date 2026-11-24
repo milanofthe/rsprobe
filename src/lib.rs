@@ -2,7 +2,9 @@
 //!
 //! A [`Context`] belongs to one problem. Scopes entered while it is current
 //! form a tree of nodes keyed by (parent node, call site); every node holds
-//! additive `u64` measures: `calls`, `wall` and `busy` in nanoseconds, the
+//! additive `u64` measures: `calls`, `wall` and `busy` in nanoseconds and,
+//! for work on pool threads, `worker_calls`, `pool` and `tasks` (see
+//! Threads), the
 //! counts added with [`add!`], the times added with [`time!`] and, with the
 //! feature `alloc` where the binary installs [`Alloc`], `bytes`, `allocs` and
 //! `freed`. Levels set with [`max!`] and the allocator's `peak` are merged by
@@ -37,9 +39,22 @@
 //! The current node is thread-local. [`current`] returns it as a `Copy`
 //! [`Handle`]; [`Handle::enter`] on another thread makes that node current
 //! there, so scopes entered by a pool task hang under the node that started
-//! the section. Elapsed time on a thread entered through [`Context::enter`]
-//! adds to `wall`, on a thread entered through a handle to `busy`; the handle
-//! guard's own span adds to `busy` of the handle's node.
+//! the section. The built-in measures of a node by the kind of thread:
+//!
+//! - `calls`: its scope instances on any thread;
+//! - `wall`: the time of its instances on threads entered through
+//!   [`Context::enter`], and at the root the spans of the context's guards;
+//! - `busy`: the time of its instances on threads entered through a handle;
+//! - `worker_calls`: the part of `calls` on threads entered through a handle;
+//! - `pool`: the spans of handle guards entered at the node, the time worker
+//!   threads spent in tasks under it;
+//! - `tasks`: the number of those spans.
+//!
+//! So `wall + busy` is the thread time inside the node's own instances, with
+//! nothing counted twice, `(wall + busy) / calls` the time per call, and at a
+//! section's node `pool / wall` the mean number of workers in its tasks. A
+//! handle entered where its context is current already (the thread that
+//! issued the work runs it itself) moves the node only: no span, no task.
 //!
 //! # Memory
 //!
@@ -98,8 +113,9 @@ pub use record::{Calibration, Node, Param, Record, ThreadNodes};
 pub use sinks::{Buffer, Path, Sink, Stderr};
 pub use site::{Level, Site};
 
-/// Version of the record's JSON layout: 2 adds the measure kind `max`.
-const SCHEMA: u32 = 2;
+/// Version of the record's JSON layout: 2 adds the measure kind `max`, 3
+/// splits the time and the calls of a node by the kind of thread.
+const SCHEMA: u32 = 3;
 
 /// The environment variable that names the file a program writes its record
 /// to ([`Record::save`]).
