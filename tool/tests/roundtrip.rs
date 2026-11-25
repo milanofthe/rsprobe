@@ -102,7 +102,7 @@ fn report_of_the_workload() {
         .any(|(k, x)| k == "pool/wall" && *x > 0.0));
     assert!(run.get("wall") > 0.0);
     let (code, out) = tool(&["report", &dir]);
-    assert!(code == 0 && out.contains("ns/iterations"));
+    assert!(code == 0 && out.contains(" iterations, "));
     assert!(tool(&["report", "--folded", &dir]).1.starts_with("run"));
 }
 
@@ -134,7 +134,7 @@ fn compare_of_two_sizes() {
         .any(|n| path(&n.path) == "pairs" && n.measure == "join"));
     let (code, out) = tool(&["compare", &a, &b]);
     assert!(code == 0 || code == 1);
-    assert!(out.contains("nonzeros     1000 -> 1500"));
+    assert!(out.contains("nonzeros     1,000 -> 1,500"));
 }
 
 #[test]
@@ -261,7 +261,7 @@ fn threads_and_max() {
     for part in [
         "3 records, median over records.",
         "chunk max 334",
-        "differences=1000000,",
+        "1.00 M differences,",
     ] {
         assert!(out.contains(part), "{part}");
     }

@@ -156,13 +156,22 @@ fn a_sink_takes_events_up_to_its_level_as_stamped_lines() {
         assert_eq!(n.load(Relaxed), 0, "no sink at INFO: not formatted");
     }
     let _on = ctx.enter();
-    let _s = scope!("solve");
+    let s = scope!("solve");
     info!("shown to no sink");
     CLOCK.store(5_013_880, Relaxed);
     warn!("small pivot");
+    drop(s);
+    CLOCK.store(60_296_186_000, Relaxed);
+    warn!("at the root");
     let mut lines = Vec::new();
     warnings.drain(|e, path| lines.push(e.line(&path).to_string()));
-    assert_eq!(lines, ["   0.000014 warn  solve: small pivot"]);
+    assert_eq!(
+        lines,
+        [
+            "  13.9 us  warn  solve  small pivot",
+            "   1:00.3  warn  at the root"
+        ]
+    );
 }
 
 /// A sink for a reader: the texts it gets.

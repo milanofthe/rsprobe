@@ -1,10 +1,11 @@
 //! `compare`: two sets of records, node by node and measure by measure.
 
 use crate::constants::{CONFIDENCE, GATE_SHARE, MIN_EFFECT, MIN_ROUNDS};
-use crate::fmt::{g, interval, num, path, ratio};
+use crate::fmt::{apart, g, interval, path, ratio};
 use crate::overhead::{corrected, share, Corrected};
 use crate::records::{preorder, union, Nodes, Path, Run};
 use crate::stats::{median, ratio_ci};
+use rsprobe::units::{self, count, time};
 
 /// A noisy measure at a node: medians in A and B, B/A with its bootstrap
 /// interval (none with too few rounds), the verdict and the node's median
@@ -196,18 +197,14 @@ pub fn text(c: &Comparison) -> String {
         "exact measures, A -> B:".into(),
     ];
     for (p, m, x, y) in &c.exact {
-        out.push(format!(
-            "  {:<32} {m:<12} {} -> {}",
-            path(p),
-            *x as i64,
-            *y as i64
-        ));
+        let xy = apart(&[*x, *y], |v| count(v).to_string());
+        out.push(format!("  {:<32} {m:<12} {} -> {}", path(p), xy[0], xy[1]));
     }
     if c.exact.is_empty() {
         out.push("  no difference".into());
     }
     for (p, m, side, vs) in &c.nondeterministic {
-        let vs: Vec<String> = vs.iter().map(|&v| num(v)).collect();
+        let vs = apart(vs, |v| count(v).to_string());
         out.push(format!(
             "  {:<32} {m:<12} differs within {side}: {}",
             path(p),
@@ -223,23 +220,23 @@ pub fn text(c: &Comparison) -> String {
         );
     }
     out.push(format!(
-        "noisy measures, median over records (ms), B/A with its {}% bootstrap interval:",
+        "noisy measures, median over records, B/A with its {}% bootstrap interval:",
         g(100.0 * CONFIDENCE, 6)
     ));
     out.push(format!(
-        "  {:<32} {:<9} {:>10} {:>10} {:>7} {:>17} {:>6}  verdict",
+        "  {:<32} {:<9} {:>10} {:>10} {:>7} {:>17} {:>7}  verdict",
         "node", "", "A", "B", "B/A", "interval", "share"
     ));
     for n in &c.noisy {
         out.push(format!(
-            "  {:<32} {:<9} {:>10.3} {:>10.3} {:>7} {:>17} {:>5.1}%  {}",
+            "  {:<32} {:<9} {:>10} {:>10} {:>7} {:>17} {:>7}  {}",
             path(&n.path),
             n.measure,
-            n.a / 1e6,
-            n.b / 1e6,
+            time(n.a),
+            time(n.b),
             ratio(n.ratio.map(|r| r.0)),
             interval(n.ratio.map(|r| (r.1, r.2))),
-            100.0 * n.share,
+            units::share(n.share),
             n.verdict
         ));
     }
@@ -262,7 +259,7 @@ fn rule(c: &Comparison) -> String {
 pub fn table(cases: &[(String, Comparison)]) -> String {
     let mut out = vec![
         format!(
-            "run wall time, median over records (ms), B/A with its {}% bootstrap interval:",
+            "run wall time, median over records, B/A with its {}% bootstrap interval:",
             g(100.0 * CONFIDENCE, 6)
         ),
         format!(
@@ -279,9 +276,9 @@ pub fn table(cases: &[(String, Comparison)]) -> String {
             (r.a, r.b, r.ratio, r.verdict)
         });
         out.push(format!(
-            "{n:<16} {:>10.3} {:>10.3} {:>7} {:>17} {verdict:<13} {:>5}  {}",
-            a / 1e6,
-            b / 1e6,
+            "{n:<16} {:>10} {:>10} {:>7} {:>17} {verdict:<13} {:>5}  {}",
+            time(a),
+            time(b),
             ratio(r.map(|r| r.0)),
             interval(r.map(|r| (r.1, r.2))),
             c.exact.len() + c.structure.len(),

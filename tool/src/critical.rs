@@ -5,6 +5,7 @@ use crate::fmt::name;
 use crate::json::Json;
 use crate::records::{get, Map};
 use crate::Result;
+use rsprobe::units::{share, time};
 use std::rc::Rc;
 
 /// A scope instance of the trace (an "X" event): node id, the node's parent
@@ -248,15 +249,15 @@ pub fn text(spans: &[Span], node: Option<&str>, depth: usize) -> Result<String> 
         let inst = &c.instance;
         let el = inst.end - inst.start;
         out.push(format!(
-            "{}: the instance on thread {} at {:.3} ms, elapsed {:.3} ms; its chain to depth {depth}, share of the enclosing element's time:",
+            "{}: the instance on thread {} at {}, elapsed {}; its chain to depth {depth}, share of the enclosing element's time:",
             name(&c.path),
             inst.tid,
-            inst.start as f64 / 1e6,
-            el as f64 / 1e6
+            time(inst.start as f64),
+            time(el as f64)
         ));
         out.push(format!(
-            "  {:<36} {:>9} {:>9} {:>6} {:>6}",
-            "element", "start ms", "time ms", "share", "thread"
+            "  {:<36} {:>9} {:>9} {:>7} {:>6}",
+            "element", "start", "time", "share", "thread"
         ));
         for r in &c.rows {
             let label = r
@@ -266,26 +267,23 @@ pub fn text(spans: &[Span], node: Option<&str>, depth: usize) -> Result<String> 
                 .map_or("(gap)", |s| s);
             let label = format!("{}{label}", "  ".repeat(r.level - 1));
             let line = format!(
-                "  {label:<36} {:>9.3} {:>9.3} {:>5.1}% {:>6}",
-                (r.start - inst.start) as f64 / 1e6,
-                r.dur as f64 / 1e6,
-                100.0 * r.share,
+                "  {label:<36} {:>9} {:>9} {:>7} {:>6}",
+                time((r.start - inst.start) as f64),
+                time(r.dur as f64),
+                share(r.share),
                 r.tid.map_or(String::new(), |t| t.to_string())
             );
             out.push(line.trim_end().to_string());
         }
         out.push("  per node over the chain (a gap counts to the element it lies in):".into());
         for (p, t) in &c.totals {
-            let share = if el != 0 {
-                100.0 * *t as f64 / el as f64
-            } else {
-                0.0
-            };
+            let part = if el != 0 { *t as f64 / el as f64 } else { 0.0 };
             out.push(format!(
-                "  {:<36} {:>9} {:>9.3} {share:>5.1}%",
+                "  {:<36} {:>9} {:>9} {:>7}",
                 name(p),
                 "",
-                *t as f64 / 1e6
+                time(*t as f64),
+                share(part)
             ));
         }
     }

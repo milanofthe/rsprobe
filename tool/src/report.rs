@@ -2,13 +2,15 @@
 //! and each thread's values.
 
 use crate::constants::OVERHEAD_MARK;
-use crate::fmt::{g, name, num};
-use crate::overhead::{corrected, cost_share, mixed, share};
+use crate::fmt::{apart, name, num};
+use crate::overhead;
+use crate::overhead::{corrected, cost_share, mixed};
 use crate::records::{
     median_nodes, preorder, total, union, Map, Nodes, Path, Run, Set, Spread, Values,
 };
 use crate::stats::{median, sum};
 use crate::Result;
+use rsprobe::units::{bytes, count, share, time};
 use rsprobe::Param;
 
 /// Values of a node that are not user measures.
@@ -149,7 +151,7 @@ pub fn rows(runs: &[Run], asked: &[(String, String)], summed: bool) -> (Vec<Row>
         let v = &v;
         out.push(Row {
             mixed: mixed(v),
-            share: share(v, &run, "time"),
+            share: overhead::share(v, &run, "time"),
             cost_share: cost_share(v),
             ratios: ratios(v, &noisy, own, asked, &max),
             spread: spread.get(&p).cloned().unwrap_or_default(),
@@ -196,6 +198,74 @@ pub fn warnings(runs: &[Run]) -> (Vec<(Path, &'static str, String, u64)>, u64) {
     )
 }
 
+/// The allocator's counters in bytes; its `allocs` is a count.
+pub const BYTES: [&str; 3] = ["bytes", "freed", "peak"];
+
+/// Widths of the columns of times, calls and shares: the widest time
+/// below 1000 hours (`999:59:59`), count below a million (`999,999`) with
+/// the name `calls`, share (`100.0 %`).
+const TIME_WIDTH: usize = 9;
+const CALLS_WIDTH: usize = 8;
+const SHARE_WIDTH: usize = 7;
+
+/// A value through its formatter, empty for zero.
+pub fn cell<D: std::fmt::Display>(f: fn(f64) -> D, x: f64) -> String {
+    if x == 0.0 {
+        String::new()
+    } else {
+        f(x).to_string()
+    }
+}
+
+/// A node's name indented by its depth, with `mark` after it.
+fn indented(p: &Path, mark: &str) -> String {
+    let name = p.last().map_or("(run)", |s| s.0);
+    format!("{}{name}{mark}", "  ".repeat(p.len()))
+}
+
+/// The label of a row: its indented name, ` !` where the scope cost is
+/// above [`OVERHEAD_MARK`] of its time and ` ?` where it is [`mixed`].
+fn label(r: &Row) -> String {
+    let marks = [(r.cost_share > OVERHEAD_MARK, " !"), (r.mixed, " ?")];
+    let mark: String = marks.iter().filter(|m| m.0).map(|m| m.1).collect();
+    indented(&r.path, &mark)
+}
+
+/// A value of measure `m`: a size for the allocator's counters in bytes, a
+/// count otherwise.
+fn value(m: &str, x: f64) -> String {
+    match BYTES.contains(&m) {
+        true => bytes(x).to_string(),
+        false => count(x).to_string(),
+    }
+}
+
+/// A measure as text: `NAME max VALUE` for a `max` one, `NAME TIME` for a
+/// noisy one, followed by the range over the records `[lo..hi]` where given,
+/// and `COUNT NAME` for an exact one (`NAME SIZE` in bytes), `lo..hi` and
+/// `differs` where its records differ.
+pub fn measure(m: &str, x: f64, range: Option<(f64, f64)>, noisy: &Set, max: &Set) -> String {
+    let range = range.filter(|s| s.1 != 0.0);
+    if max.contains(m) {
+        return format!("{m} max {}", value(m, x));
+    }
+    if noisy.contains(m) {
+        return match range {
+            Some((lo, hi)) => format!("{m} {} [{}..{}]", time(x), time(lo), time(hi)),
+            None => format!("{m} {}", time(x)),
+        };
+    }
+    let x = match range {
+        Some((lo, hi)) => apart(&[lo, hi], |v| value(m, v)).join(".."),
+        None => value(m, x),
+    };
+    let differs = if range.is_some() { " differs" } else { "" };
+    match BYTES.contains(&m) {
+        true => format!("{m} {x}{differs}"),
+        false => format!("{x} {m}{differs}"),
+    }
+}
+
 /// The report as text.
 pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
     let (rs, run) = rows(runs, asked, summed);
@@ -215,7 +285,7 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
     });
     let raw = run.get("raw");
     let cost = if raw != 0.0 {
-        100.0 * run.get("cost") / raw
+        run.get("cost") / raw
     } else {
         0.0
     };
@@ -229,77 +299,71 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
         .into_iter()
         .filter(|m| rs.iter().any(|r| r.v.get(m) != 0.0))
         .collect();
-    let head: String = cols
+    let labels: Vec<String> = rs.iter().map(label).collect();
+    let w = labels
         .iter()
-        .map(|m| format!(" {:>10}", format!("{m} ms")))
-        .collect();
+        .map(String::len)
+        .fold("node".len(), usize::max);
+    let head: String = cols.iter().map(|m| format!(" {m:>TIME_WIDTH$}")).collect();
     let mut out = vec![
         format!(
             "{k} record{}{merged}. {}{old}",
             if k > 1 { "s" } else { "" },
             ps.collect::<Vec<_>>().join(" ")
         ),
-        format!("calibration: inner {inner:.1} ns, outer {outer:.1} ns (mean over records)"),
         format!(
-            "run: wall {:.3} ms, thread time {:.3} ms, scope cost {cost:.2}% of the thread time",
-            run.get("wall") / 1e6,
-            run.get("thread") / 1e6
+            "calibration: inner {}, outer {} (mean over records)",
+            time(inner),
+            time(outer)
+        ),
+        format!(
+            "run: wall {}, thread time {}, scope cost {}",
+            time(run.get("wall")),
+            time(run.get("thread")),
+            share(cost)
         ),
         String::new(),
         format!(
-            "{:<28} {:>8}{head} {:>10} {:>7} {:>6}   measures",
-            "node", "calls", "self ms", "share", "scope"
+            "{:<w$} {:>CALLS_WIDTH$}{head} {:>TIME_WIDTH$} {:>SHARE_WIDTH$}   measures",
+            "node", "calls", "self", "share"
         ),
     ];
     let mut noisy = union(runs, |r| r.kind("noisy"));
     noisy.extend(["wall", "busy", "pool", "time"]);
     let max = union(runs, |r| r.kind("max"));
-    let measure = |r: &Row, m: &str, x: f64| {
-        let s = r.spread.iter().find(|s| s.0 == m).map(|s| s.1);
-        let hi = s.filter(|s| s.1 != 0.0);
-        if max.contains(m) {
-            return format!("{m} max {}", x as i64);
-        }
-        if noisy.contains(m) {
-            let ms = match r.measures().any(|v| v.0 == m) {
-                true => format!("{m} {:.3} ms", x / 1e6),
-                false => m.to_string(),
-            };
-            return ms
-                + &hi.map_or(String::new(), |(lo, hi)| {
-                    format!(" [{:.3}..{:.3}]", lo / 1e6, hi / 1e6)
-                });
-        }
-        match hi {
-            Some((lo, hi)) => format!("{m}={}..{} differs", lo as i64, hi as i64),
-            None => format!("{m}={}", x as i64),
-        }
-    };
-    for r in &rs {
+    for (r, label) in rs.iter().zip(&labels) {
+        let ratio = |k: &str| r.ratios.iter().find(|x| x.0 == k).map(|x| x.1);
+        let range = |m: &str| r.spread.iter().find(|s| s.0 == m).map(|s| s.1);
+        let mut user: Vec<String> = ratio("pool/wall")
+            .map(|x| format!("{} workers", count(x)))
+            .into_iter()
+            .collect();
         let spread = ["calls", "time"]
             .into_iter()
-            .filter(|m| r.spread.iter().any(|s| s.0 == *m));
-        let mut user: Vec<String> = spread.map(|m| measure(r, m, r.v.get(m))).collect();
-        user.extend(r.measures().map(|&(m, x)| measure(r, m, x)));
-        user.extend(r.ratios.iter().map(|(k, x)| format!("{k} {}", g(*x, 4))));
-        let mark = [(r.cost_share > OVERHEAD_MARK, '!'), (r.mixed, '?')];
-        let mark: String = mark.iter().map(|m| if m.0 { m.1 } else { ' ' }).collect();
+            .filter_map(|m| range(m).map(|s| measure(m, r.v.get(m), Some(s), &noisy, &max)));
+        user.extend(spread);
+        user.extend(r.measures().map(|&(m, x)| {
+            let text = measure(m, x, range(m), &noisy, &max);
+            match (ratio(&format!("ns/{m}")), ratio(&format!("{m}/time"))) {
+                (Some(t), _) => format!("{text}, {} each", time(t)),
+                (_, Some(s)) => format!("{text} ({})", share(s)),
+                _ => text,
+            }
+        }));
+        user.extend(asked.iter().filter_map(|(a, b)| {
+            let k = format!("{a}/{b}");
+            ratio(&k).map(|x| format!("{k} {}", count(x)))
+        }));
         let times: String = cols
             .iter()
-            .map(|m| format!(" {:>10.3}", r.v.get(m) / 1e6))
+            .map(|m| format!(" {:>TIME_WIDTH$}", cell(time, r.v.get(m))))
             .collect();
-        let label = format!(
-            "{}{}",
-            "  ".repeat(r.path.len()),
-            r.path.last().map_or("(run)", |s| s.0)
-        );
         out.push(
             format!(
-                "{label:<28} {:>8}{times} {:>10.3} {:>6.1}% {:>5.1}%{mark} {}",
-                r.v.get("calls") as i64,
-                r.v.get("self") / 1e6,
-                100.0 * r.share,
-                100.0 * r.cost_share,
+                "{label:<w$} {:>CALLS_WIDTH$}{times} {:>TIME_WIDTH$} {:>SHARE_WIDTH$}   {}",
+                cell(count, r.v.get("calls")),
+                cell(time, r.v.get("self")),
+                share(r.share),
                 user.join(", ")
             )
             .trim_end()
@@ -311,8 +375,8 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
         "wall, busy: time of the node's scope instances on threads entered through the context and through a handle; pool: time of the tasks (handle guards) entered at the node; thread time: wall of the run + pool of all nodes.".into(),
         "Scope cost subtracted, full = inner + outer: wall - (calls - worker_calls) inner - (calling-thread instances below) full; busy - worker_calls inner - (worker instances below, down to nodes with tasks) full; pool - (those instances below a node with tasks) full.".into(),
         "time = wall + busy; self = time - wall of the children - busy of the children of a node without tasks; share: time over the thread time.".into(),
-        format!("scope: estimated scope cost in the node's recorded wall + busy; ! above {}%. ?: tasks and worker instances of its own, the worker instances below taken as run in its tasks.", (100.0 * OVERHEAD_MARK) as i64),
-        "ns/X: time per unit of an exact measure at scopes without tasks; pool/wall: mean workers in its tasks; others with --ratio A/B.".into(),
+        format!("!: estimated scope cost above {} of the node's recorded wall + busy. ?: tasks and worker instances of its own, the worker instances below taken as run in its tasks.", share(OVERHEAD_MARK)),
+        "COUNT NAME, TIME each: an exact measure and the time per unit at scopes without tasks; NAME TIME (SHARE): a time! measure and its share of the node's time; NAME max VALUE: a max! measure; N workers: pool/wall, the mean workers in its tasks; others with --ratio A/B.".into(),
     ]);
     if k > 1 && !summed {
         out.push(
@@ -380,17 +444,27 @@ pub fn threads(runs: &[Run], node: Option<&str>) -> Result<String> {
         if paths.is_empty() {
             return Err(format!("{}: no node {}", r.file, node.unwrap_or("None")));
         }
-        let (noisy, max) = (r.kind("noisy"), r.kind("max"));
+        let (mut noisy, max) = (r.kind("noisy"), r.kind("max"));
+        noisy.extend(["wall", "busy", "pool"]);
         out.push(format!(
             "{}: {} threads, recorded values (scope cost not subtracted)",
             r.file,
             ts.len()
         ));
+        let labels: Vec<String> = paths.iter().map(|p| indented(p, "")).collect();
+        let w = labels
+            .iter()
+            .map(String::len)
+            .fold("node".len(), usize::max);
+        let head: String = ["wall", "busy", "pool"]
+            .iter()
+            .map(|m| format!(" {m:>TIME_WIDTH$}"))
+            .collect();
         out.push(format!(
-            "{:<28} {:>6} {:<7} {:>8} {:>10} {:>10} {:>10} {:>9}  measures",
-            "node", "thread", "via", "calls", "wall ms", "busy ms", "pool ms", "load"
+            "{:<w$} {:>6} {:<7} {:>CALLS_WIDTH$}{head} {:>9}  measures",
+            "node", "thread", "via", "calls", "load"
         ));
-        for p in &paths {
+        for (p, label) in paths.iter().zip(labels) {
             let vs: Vec<_> = ts
                 .iter()
                 .filter_map(|(t, n)| n.get(p).map(|v| (t, v)))
@@ -402,29 +476,22 @@ pub fn threads(runs: &[Run], node: Option<&str>) -> Result<String> {
             } else {
                 sum(busy.iter().copied()) / busy.len() as f64
             };
-            let mut label = format!(
-                "{}{}",
-                "  ".repeat(p.len()),
-                p.last().map_or("(run)", |s| s.0)
-            );
+            let mut label = label;
             for (t, v) in vs {
                 let user =
                     v.0.iter()
                         .filter(|m| !BUILTIN.contains(&m.0) && m.1 != 0.0)
-                        .map(|&(m, x)| match (max.contains(m), noisy.contains(m)) {
-                            (true, _) => format!("{m} max {}", x as i64),
-                            (_, true) => format!("{m} {:.3} ms", x / 1e6),
-                            _ => format!("{m}={}", x as i64),
-                        });
+                        .map(|&(m, x)| measure(m, x, None, &noisy, &max));
+                let times: String = ["wall", "busy", "pool"]
+                    .iter()
+                    .map(|m| format!(" {:>TIME_WIDTH$}", cell(time, v.get(m))))
+                    .collect();
                 let b = work(v);
                 let line = format!(
-                    "{label:<28} {:>6} {:<7} {:>8} {:>10.3} {:>10.3} {:>10.3} {:>9}  {}",
+                    "{label:<w$} {:>6} {:<7} {:>CALLS_WIDTH$}{times} {:>9}  {}",
                     t.index,
                     if t.handle { "handle" } else { "context" },
-                    v.get("calls") as i64,
-                    v.get("wall") / 1e6,
-                    v.get("busy") / 1e6,
-                    v.get("pool") / 1e6,
+                    cell(count, v.get("calls")),
                     if b != 0.0 {
                         format!("{:.3}", b / mean)
                     } else {

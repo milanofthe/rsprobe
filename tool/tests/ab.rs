@@ -45,11 +45,11 @@ fn one_table_across_cases() {
         .iter()
         .map(|l| l.split_whitespace().collect())
         .collect();
-    // B takes twice A's time at every size: run wall in ms, B/A 2.
-    assert_eq!(rows[0][..4], ["small", "0.010", "0.020", "2.000"]);
-    assert_eq!(rows[1][..4], ["large", "0.100", "0.200", "2.000"]);
+    // B takes twice A's time at every size: run wall with its unit, B/A 2.
+    assert_eq!(rows[0][..6], ["small", "10.0", "us", "20.0", "us", "2.000"]);
+    assert_eq!(rows[1][..6], ["large", "100", "us", "200", "us", "2.000"]);
     for r in &rows {
-        assert_eq!(r[6..], ["slower", "0", "fails", "on", "(run)", "wall"]);
+        assert_eq!(r[8..], ["slower", "0", "fails", "on", "(run)", "wall"]);
     }
     assert_eq!(std::fs::read_dir(out.join("large/b")).unwrap().count(), 3);
     std::fs::remove_dir_all(&out).unwrap();
