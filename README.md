@@ -96,7 +96,7 @@ Progress events of a call site pass at most once a second (`Builder::progress_in
    1:00.3  info  transient  done
 ```
 
-`rsprobe::units` writes numbers for a reader, the same in these lines, in the tool's tables and in a caller's own messages (`info!("{} unknowns", units::count(n as f64))`): `time` from ns in `ns`, `us`, `ms`, `s` and from a minute `m:ss.s` (from an hour `h:mm:ss`), `count` exact with a comma between groups of three digits below one million and in `M`, `G` above, `bytes` in `B`, `kB`, `MB`, `GB`, `share` as `23.2 %`. A number has three digits: three significant ones from 1 up and two decimals below 1, in the largest unit in which it is at least 1 (999.5 us is `1.00 ms`). Only what is shown is rounded: the record, the trace and the sinks' events keep integers in ns and raw counts.
+`rsprobe::units` writes numbers for a reader, the same in these lines, in the tool's tables and in a caller's own messages (`info!("{} unknowns", units::count(n as f64))`): `time` from ns in `ns`, `us`, `ms`, `s` and from a minute `m:ss.s` (from an hour `h:mm:ss`), `count` exact with a comma between groups of three digits below one million and in `M`, `G` above, `bytes` in `B`, `kB`, `MB`, `GB`, `share` as `23.2 %`, below 1 percent with two significant digits (`0.03 %`). A number has three digits: three significant ones from 1 up and two decimals below 1, in the largest unit in which it is at least 1 (999.5 us is `1.00 ms`). Only what is shown is rounded: the record, the trace and the sinks' events keep integers in ns and raw counts.
 
 The threshold says what is recorded, a sink's level what it is shown: `.sink_at(Level::WARN, Stderr::default())` under a threshold of INFO keeps the scopes, so a warning is shown with its path, without the INFO messages.
 
@@ -146,23 +146,23 @@ A record of schema 2 has no split by kind of thread: its `busy` includes the spa
 ```
 1.json: 5 threads, recorded values (scope cost not subtracted)
 node    thread via        calls      wall      busy      pool      load  measures
-  pairs      0 context        1   1.54 ms                                chunk max 500, join 1.41 ms
-             1 handle                                 1.34 ms     0.995
-             2 handle                                 1.35 ms     1.005
-             3 handle                                 1.35 ms     1.002
-             4 handle                                 1.34 ms     0.997
+  pairs      0 context        1   1.00 ms                                chunk max 500, join 932 us
+             1 handle                                  878 us     0.986
+             2 handle                                  893 us     1.003
+             3 handle                                  895 us     1.006
+             4 handle                                  895 us     1.005
 ```
 
 ```
-run: wall 1.61 ms, thread time 6.99 ms, scope cost 0.0 %
+run: wall 1.05 ms, thread time 4.61 ms, scope cost 0.027 %
 node             calls      wall      busy      pool      self   share   measures
-(run)                    1.61 ms                       5.97 us  23.0 %
-  assemble           1   4.31 us                       4.31 us   0.1 %   2,000 nonzeros, 2.15 ns each
-  sort               1   45.9 us                       45.9 us   0.7 %
-  solve              1   16.0 us                        912 ns   0.2 %
-    iteration        5   15.1 us                       15.1 us   0.2 %   5 iterations, 3.01 us each
-  pairs              1   1.54 ms             5.39 ms   1.54 ms  22.0 %   3.51 workers, chunk max 500, join 1.41 ms (91.5 %)
-    task             4             5.36 ms             5.36 ms  76.6 %   4.00 M differences, 1.34 ns each
+(run)                    1.05 ms                       5.18 us  22.8 %
+  assemble           1   6.45 us                       6.45 us  0.14 %   2,000 nonzeros, 3.23 ns each
+  sort               1   28.4 us                       28.4 us  0.61 %
+  solve              1   9.23 us                        377 ns   0.2 %
+    iteration        5   8.85 us                       8.85 us  0.19 %   5 iterations, 1.77 us each
+  pairs              1   1.00 ms             3.56 ms   1.00 ms  21.7 %   3.55 workers, chunk max 500, join 932 us (92.9 %)
+    task             4             3.55 ms             3.55 ms  76.9 %   4.00 M differences, 0.89 ns each
 ```
 
 `compare A B [--aa A2]`: exact measures first, every difference between the sets and within a set; then per node and noisy measure (`wall`, `busy`, `pool` and those added with `time!`) the ratio of the medians with a 95 percent bootstrap interval, against a noise band from the A/A sets when given. Exit code 1 when the `wall` of a node of at least 5 percent of the run's wall time is slower beyond the band; `busy`, `pool` and the `time!` measures get a verdict, with their share of the run's thread time, but do not fail the gate (they also grow where a worker waits), `--gate MEASURE` adds one, repeatable. The footer states the rule.
@@ -172,8 +172,8 @@ exact measures, A -> B:
   pairs/task                       calls        4 -> 2
 noisy measures, median over records, B/A with its 95% bootstrap interval:
   node                                                A          B     B/A          interval   share  verdict
-  sort                             wall         42.0 us    45.0 us   1.066    [0.855, 1.252]   1.4 %  within noise
-  pairs                            wall         3.03 ms    5.50 ms   1.818    [1.678, 2.069]  98.0 %  slower
+  sort                             wall         34.6 us    28.0 us   0.808    [0.654, 0.914]   3.1 %  faster
+  pairs                            wall         1.07 ms    1.93 ms   1.807    [1.289, 2.239]  95.2 %  slower
 gate: fails on (run) wall, pairs wall
 gate rule: fails where a node of at least 5% of the run is slower beyond the band in wall; other measures get a verdict only, --gate MEASURE adds one
 ```
@@ -181,10 +181,10 @@ gate rule: fails where a node of at least 5% of the run is slower beyond the ban
 `ab --rounds N [--aa] -- CMD_A :: CMD_B`: runs the commands alternately, each writing its record to the path in `RSPROBE_RECORD` (`examples/workload.rs` shows the program side), then compares; `--aa` runs A a second time per round for the noise band. The order of the arms rotates per round, in blocks that put each arm once in each position, drawn with a fixed seed, and is printed per round, so a drift over the run or a warm cache does not fall on one arm. `--gate` as for `compare`. `--case NAME=ARGS`, repeated, appends ARGS to both commands per configuration and prints one table across them: the run's wall time, its verdict, the exact differences and the gate.
 
 ```
-round 3/3 order a b aa
-round 3/3 a  5.13 ms
-round 3/3 b  8.02 ms
-round 3/3 aa 5.09 ms
+round 3/3 order b aa a
+round 3/3 b  3.44 ms
+round 3/3 aa 2.65 ms
+round 3/3 a  2.62 ms
 records in /tmp/rsprobe-ab-x1y2
 ```
 
@@ -195,7 +195,8 @@ records in /tmp/rsprobe-ab-x1y2
 ```
 10 records, per node against its own differences: c x^p log^q(x) by least squares in log space over the records that have it, residual the rms of ln y.
   node                             measure      points          c model             residual
-  pairs/task                       time             10       1.24 x^0.93 log x         0.052
+  pairs/task                       time             10     0.0537 x^0.99 log x         0.025
+  pairs/task                       calls            10          4 x^0.00               0.000
 skipped: without differences (run), assemble, sort, solve, solve/iteration, pairs; fewer than 3 values none
 time not following differences, residual above 0.25: none
 ```
@@ -203,28 +204,28 @@ time not following differences, residual above 0.25: none
 `critical TRACE [--node PATH] [--depth N]`: the chain of spans that bounds a scope instance's elapsed time, from a trace (`ctx.trace()` of a context built with `.stream()`), for a phase whose children run on a pool. For the longest instance of PATH (default: of each top-level scope), from its end back: the span of a child scope inside it, on any thread, that ends last at or before the current time joins the chain, and the walk continues from its start; time between chain elements is a gap (waiting or unrecorded). Each element with spans inside it is followed the same way, to depth N (default 2). Per element its start, duration, thread and share of the enclosing element's time, then per node the time on the chain, a gap counted to the element it lies in. Child spans are matched to the instance by node and time.
 
 ```
-pairs: the instance on thread 0 at 827 us, elapsed 9.65 ms; its chain to depth 2, share of the enclosing element's time:
+pairs: the instance on thread 0 at 231 us, elapsed 12.0 ms; its chain to depth 2, share of the enclosing element's time:
   element                                  start      time   share thread
-  (gap)                                     0 ns    182 us   1.9 %
-  task                                    182 us   9.45 ms  97.9 %      4
-  (gap)                                  9.63 ms   22.0 us   0.2 %
+  (gap)                                     0 ns   35.7 us   0.3 %
+  task                                   35.7 us   12.0 ms  99.6 %      2
+  (gap)                                  12.0 ms   11.2 us 0.094 %
   per node over the chain (a gap counts to the element it lies in):
-  pairs/task                                       9.45 ms  97.9 %
-  pairs                                             204 us   2.1 %
+  pairs/task                                       12.0 ms  99.6 %
+  pairs                                            47.0 us  0.39 %
 ```
 
 ```
 15 records over n = 1000 2000 4000 8000 16000: 5 points per fit, c n^p log^q(n) by least squares in log space, residual the rms of ln y.
   node                             measure               c model             residual
-  sort                             time               2.43 n^0.94 log n         0.245
-  solve/iteration                  time               1.15 n^0.88 log n         0.005
-  pairs/task                       time               0.18 n^1.92 log n         0.016
+  sort                             time                4.8 n^0.87 log n         0.238
+  solve/iteration                  time               7.14 n^0.92               0.032
+  pairs/task                       time              0.692 n^2.01               0.021
   pairs/task                       differences           1 n^2.00               0.000
-dominant: pairs/task, local exponent 2.02 at n = 16000 (largest self time); departing by more than 0.1: assemble (1.10), sort (1.05), solve (0.98), solve/iteration (0.99), pairs (1.85)
+dominant: pairs/task, local exponent 2.01 at n = 16000 (largest self time); departing by more than 0.1: assemble (1.03), sort (0.97), solve (0.89), solve/iteration (0.92)
 
   node                             threads       wall  speedup efficiency    serial    wait
-  pairs                                  4    13.7 ms     3.30     82.6 %     0.070   6.2 %
-  pairs                                  8    9.91 ms     4.57     57.1 %     0.107  22.6 %
+  pairs                                  4    12.1 ms     3.56     88.9 %     0.042   1.7 %
+  pairs                                  8    9.78 ms     4.39     54.9 %     0.117  27.0 %
 ```
 
 ## License

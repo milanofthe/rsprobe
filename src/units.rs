@@ -20,7 +20,9 @@
 //!   `G`, `T`, `P`, `E` (`1.00 M`, `217 M`).
 //! - [`bytes`]: below 1000 after rounding as a count with ` B`, from 1000 in
 //!   `kB`, `MB`, `GB`, `TB`, `PB`, `EB` (powers of 1000).
-//! - [`share`]: a fraction as a percentage with one decimal (`23.2 %`).
+//! - [`share`]: a fraction as a percentage, with one decimal from 1 percent
+//!   up (`23.2 %`, `1.0 %`) and two significant digits below, trailing zeros
+//!   dropped (`0.71 %`, `0.03 %`); `0 %` only for an exact zero.
 //!
 //! A zero is `0` in the smallest unit (`0 ns`, `0 B`), a negative value its
 //! magnitude with a `-`; only ASCII is written (`us`, not the micro sign).
@@ -108,8 +110,13 @@ fn padded(f: &mut Formatter, write: impl Fn(&mut dyn Write) -> fmt::Result) -> f
 
 /// `x >= 0` rounded to three significant digits.
 fn round3(x: f64) -> f64 {
+    round(x, 3)
+}
+
+/// `x >= 0` rounded to `digits` significant digits.
+fn round(x: f64, digits: usize) -> f64 {
     let mut b = Buf { b: [0; 48], n: 0 };
-    match write!(b, "{x:.2e}") {
+    match write!(b, "{x:.*e}", digits - 1) {
         Ok(()) => std::str::from_utf8(&b.b[..b.n])
             .ok()
             .and_then(|s| s.parse().ok())
@@ -228,6 +235,21 @@ impl Display for Bytes {
 
 impl Display for Share {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        padded(f, |w| write!(w, "{:.1} %", 100.0 * self.0))
+        signed(f, self.0, |w, x| {
+            let p = 100.0 * x;
+            if p == 0.0 {
+                return w.write_str("0 %");
+            }
+            let r = round(p, 2);
+            if r >= 1.0 {
+                return write!(w, "{p:.1} %");
+            }
+            // Two significant digits below 1, then the zeros after them dropped.
+            let d = (1 - r.log10().floor() as i32).max(1) as usize;
+            let mut b = Buf { b: [0; 48], n: 0 };
+            write!(b, "{r:.d$}")?;
+            let s = std::str::from_utf8(&b.b[..b.n]).map_err(|_| fmt::Error)?;
+            write!(w, "{} %", s.trim_end_matches('0'))
+        })
     }
 }

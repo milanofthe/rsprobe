@@ -70,11 +70,17 @@ fn sizes_and_shares() {
     for (n, text) in cases {
         assert_eq!(bytes(n).to_string(), text, "{n} B");
     }
-    let cases: [(f64, &str); 4] = [
+    let cases: [(f64, &str); 10] = [
         (0.232, "23.2 %"),
-        (0.0003, "0.0 %"),
+        (0.766, "76.6 %"),
         (0.9326, "93.3 %"),
         (1.0, "100.0 %"),
+        (0.01, "1.0 %"),
+        (0.0099, "0.99 %"),
+        (0.0071, "0.71 %"),
+        (0.0003, "0.03 %"),
+        (0.0, "0 %"),
+        (-0.0071, "-0.71 %"),
     ];
     for (x, text) in cases {
         assert_eq!(share(x).to_string(), text, "{x}");
