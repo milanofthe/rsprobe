@@ -185,8 +185,10 @@ pub(crate) struct Paced {
 /// `total` units passes now, by the rule of
 /// [`Builder::progress_interval`](crate::Builder::progress_interval).
 fn due(shared: &Shared, site: (&'static str, u32, u32), done: u64, total: u64) -> bool {
-    let now = (shared.cfg.clock)() - shared.start;
     let mut sites = lock(&shared.progress);
+    // Read under the lock: the clock does not decrease, so no thread stores
+    // a later `since` between this read and its use.
+    let now = (shared.cfg.clock)() - shared.start;
     let i = sites
         .iter()
         .position(|s| s.site == site)
