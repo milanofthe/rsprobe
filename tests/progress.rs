@@ -92,3 +92,57 @@ fn loops_without_a_total_on_two_threads_are_two_runs() {
     buffer.drain(|e, _| seen.push(e.kind.to_string()));
     assert_eq!(seen, ["60 iteration"]);
 }
+
+#[test]
+fn threads_of_one_run_read_the_clock_in_the_order_they_pace() {
+    use rsprobe::current;
+    use std::cell::Cell;
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    static READ: AtomicBool = AtomicBool::new(false);
+    static OTHER_DONE: AtomicBool = AtomicBool::new(false);
+    thread_local!(static HOLD: Cell<bool> = const { Cell::new(false) });
+    // The clock of this thread's next read, held until the other thread's
+    // event has passed or a lock keeps it out.
+    fn clock() -> u64 {
+        let t = CLOCK.load(SeqCst);
+        if HOLD.with(|h| h.replace(false)) {
+            READ.store(true, SeqCst);
+            let end = Instant::now() + Duration::from_millis(200);
+            while !OTHER_DONE.load(SeqCst) && Instant::now() < end {
+                std::thread::yield_now();
+            }
+        }
+        t
+    }
+    // One call site for both threads.
+    fn report(done: u64) {
+        progress!(done, 10);
+    }
+    let buffer = Buffer::default();
+    let ctx = Context::builder()
+        .clock(clock)
+        .progress_interval(0)
+        .sink(buffer.clone())
+        .build();
+    let _on = ctx.enter();
+    let h = current();
+    let other = std::thread::spawn(move || {
+        let _g = h.enter();
+        while !READ.load(SeqCst) {
+            std::thread::yield_now();
+        }
+        CLOCK.store(2_000_000, SeqCst);
+        report(2);
+        OTHER_DONE.store(true, SeqCst);
+    });
+    CLOCK.store(1_000_000, SeqCst);
+    HOLD.with(|h| h.set(true));
+    report(1);
+    other.join().unwrap();
+    let mut seen = Vec::new();
+    buffer.drain(|e, _| seen.push(e.kind.to_string()));
+    seen.sort();
+    assert_eq!(seen, ["1/10", "2/10"]);
+}
