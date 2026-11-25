@@ -131,9 +131,10 @@ fn ratios_per_unit_and_share() {
         [("wait/time", 198.0 / 990.0), ("pool/wall", 3540.0 / 990.0)]
     );
     let text = report::text(&runs, &[], false);
-    assert!(line(&text, "  par").contains("wait 0.000 ms"));
-    assert!(line(&text, "node").contains("wall ms    busy ms    pool ms"));
-    assert!(line(&text, "run:").contains("thread time 0.013 ms"));
+    assert!(line(&text, "  par").contains("wait 198 ns (20.0 %)"));
+    assert!(line(&text, "    it").ends_with("10 iterations, 490 ns each"));
+    assert!(line(&text, "node").contains("  wall      busy      pool  "));
+    assert!(line(&text, "run:").contains("thread time 13.3 us"));
 }
 
 #[test]
@@ -161,7 +162,7 @@ fn mark_above_the_stated_share() {
         ],
     )];
     // Scope cost 10*3 of 200 = 15 percent, above the 10 percent mark.
-    assert!(line(&report::text(&runs, &[], false), "  tiny").contains("15.0%!"));
+    assert!(line(&report::text(&runs, &[], false), "  tiny").starts_with("  tiny ! "));
 }
 
 #[test]
@@ -506,7 +507,7 @@ fn a_node_with_tasks_and_worker_instances_is_marked() {
     assert_eq!(got, [1480.0, 510.0, 1480.0]);
     assert_eq!(row(&rows, &["par"]).v.get("pool"), 1570.0);
     let text = report::text(&runs, &[], false);
-    assert!(line(&text, "    block").contains("% ?"));
+    assert!(line(&text, "    block").starts_with("    block ? "));
     assert!(!line(&text, "  par").contains('?'));
 }
 
@@ -614,11 +615,11 @@ fn median_text() {
     assert!(out.contains("3 records, median over records."));
     let l = line(&out, "  solve");
     for part in [
-        "time [0.000..0.001]",
-        "nnz=50,",
-        "iterations=7..8 differs",
-        "peak max 900",
-        "50.0%",
+        "time 500 ns [400 ns..600 ns]",
+        "50 nnz, 10.0 ns each",
+        "7..8 iterations differs, 71.4 ns each",
+        "peak max 900 B",
+        "50.0 %",
     ] {
         assert!(l.contains(part), "{part} in {l}");
     }
@@ -757,40 +758,13 @@ fn threads_at_a_node() {
     let out = report::threads(&[with_threads(true)], Some("par/task")).unwrap();
     let lines: Vec<&str> = out.lines().collect();
     assert!(lines[0].ends_with("3 threads, recorded values (scope cost not subtracted)"));
-    let rows: Vec<Vec<&str>> = lines[2..]
-        .iter()
-        .map(|l| l.split_whitespace().collect())
-        .collect();
+    // Each time in its unit, an empty cell for zero.
     assert_eq!(
-        rows,
+        lines[1..],
         [
-            vec![
-                "task",
-                "1",
-                "handle",
-                "2",
-                "0.000",
-                "0.003",
-                "0.000",
-                "1.526",
-                "allocs=4,",
-                "peak",
-                "max",
-                "640"
-            ],
-            vec![
-                "2",
-                "handle",
-                "1",
-                "0.000",
-                "0.001",
-                "0.000",
-                "0.474",
-                "allocs=2,",
-                "peak",
-                "max",
-                "320"
-            ]
+            "node     thread via        calls      wall      busy      pool      load  measures",
+            "    task      1 handle         2             2.90 us               1.526  4 allocs, peak max 640 B",
+            "              2 handle         1              900 ns               0.474  2 allocs, peak max 320 B",
         ]
     );
 }
@@ -801,17 +775,18 @@ fn threads_of_the_tree() {
     let rows: Vec<Vec<&str>> = out
         .lines()
         .skip(2)
-        .map(|l| l.split_whitespace().take(3).collect())
+        .map(|l| l.split_whitespace().take(2).collect())
         .collect();
     let expected = [
-        ["(run)", "0", "context"],
-        ["par", "0", "context"],
-        ["1", "handle", "0"],
-        ["2", "handle", "0"],
-        ["task", "1", "handle"],
-        ["2", "handle", "1"],
+        ["(run)", "0"],
+        ["par", "0"],
+        ["1", "handle"],
+        ["2", "handle"],
+        ["task", "1"],
+        ["2", "handle"],
     ];
     assert_eq!(rows, expected);
+    assert_eq!(out.matches(" context ").count(), 2);
 }
 
 #[test]

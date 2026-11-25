@@ -32,7 +32,8 @@
 //! emit an [`Event`] at the current node; the text is formatted only when the
 //! site is active and the event is taken. The context passes each event to
 //! the [`Sink`]s of its level and keeps the distinct events at WARN and above
-//! for the record. [`Stderr`] writes an event as its [`Event::line`].
+//! for the record. [`Stderr`] writes an event as its [`Event::line`], with
+//! the time in the format of [`units`], which formats numbers for a reader.
 //!
 //! # Threads
 //!
@@ -102,6 +103,7 @@ mod sinks;
 mod site;
 mod stream;
 mod thread;
+pub mod units;
 
 pub use alloc::Alloc;
 #[cfg(feature = "log")]

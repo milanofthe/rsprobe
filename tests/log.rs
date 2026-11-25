@@ -54,9 +54,9 @@ fn log_records_become_events_and_events_become_records() {
         got,
         [
             "INFO from log 1",
-            "INFO solve: from log 1",
+            "INFO solve  from log 1",
             "DEBUG below the threshold",
-            "WARN solve: from rsprobe",
+            "WARN solve  from rsprobe",
         ]
     );
 }

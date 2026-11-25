@@ -3,6 +3,7 @@
 use crate::constants::AB_SEED;
 use crate::stats::Rng;
 use crate::Result;
+use rsprobe::units::time;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
@@ -144,8 +145,8 @@ pub fn run(
                 } else {
                     format!("{c} ")
                 };
-                let secs = t.elapsed().as_secs_f64();
-                println!("round {}/{rounds} {case}{arm:<2} {secs:.3} s", k + 1);
+                let ns = t.elapsed().as_nanos() as f64;
+                println!("round {}/{rounds} {case}{arm:<2} {}", k + 1, time(ns));
             }
         }
     }

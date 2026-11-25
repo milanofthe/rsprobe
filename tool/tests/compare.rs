@@ -140,6 +140,12 @@ fn exact_difference_is_always_reported() {
         .collect();
     assert_eq!(exact, [("work".to_string(), "iterations", 10.0, 11.0)]);
     assert!(text(&c).contains("iterations   10 -> 11"));
+    // a difference the rounding of a count would hide is written exactly
+    let a = records(0.0, 0.05, 3, 4_000_000, false);
+    let c = compare(&a, &records(0.0, 0.05, 4, 4_000_001, false), None, &GATE);
+    assert!(text(&c).contains("iterations   4000000 -> 4000001"));
+    let c = compare(&a, &records(0.0, 0.05, 4, 5_000_000, false), None, &GATE);
+    assert!(text(&c).contains("iterations   4.00 M -> 5.00 M"));
 }
 
 #[test]

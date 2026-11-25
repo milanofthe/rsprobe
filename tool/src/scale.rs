@@ -8,6 +8,7 @@ use crate::records::{median_nodes, preorder, union, Nodes, Path, Run, Set, Value
 use crate::report::BUILTIN;
 use crate::stats::{karp_flatt, local_exponent, power_fit};
 use crate::Result;
+use rsprobe::units::{share, time};
 use rsprobe::Param;
 
 /// A fit of c n^p log^q(n) to a measure at a node: node, measure, c, p, q,
@@ -278,18 +279,18 @@ pub fn text_threads(runs: &[Run], by: &str) -> Result<String> {
             g(t.t0, 6)
         ),
         format!(
-            "  {:<32} {by:>7} {:>10} {:>8} {:>10} {:>9} {:>6}",
-            "node", "wall ms", "speedup", "efficiency", "serial", "wait"
+            "  {:<32} {by:>7} {:>10} {:>8} {:>10} {:>9} {:>7}",
+            "node", "wall", "speedup", "efficiency", "serial", "wait"
         ),
     ];
     for (p, n, wall, s, e, f, wait) in &t.rows {
         out.push(format!(
-            "  {:<32} {:>7} {:>10.3} {s:>8.2} {:>9.1}% {f:>9.3} {:>6}",
+            "  {:<32} {:>7} {:>10} {s:>8.2} {:>10} {f:>9.3} {:>7}",
             path(p),
             g(*n, 6),
-            wall / 1e6,
-            100.0 * e,
-            wait.map_or(String::new(), |w| format!("{:.1}%", 100.0 * w))
+            time(*wall),
+            share(*e),
+            wait.map_or(String::new(), |w| share(w).to_string())
         ));
     }
     Ok(out.join("\n"))

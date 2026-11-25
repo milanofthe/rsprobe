@@ -65,6 +65,17 @@ pub fn num(x: f64) -> String {
     }
 }
 
+/// Values that differ, each through `f`, or all exactly ([`num`]) where `f`
+/// writes two different ones the same: an exact difference stays visible.
+pub fn apart(xs: &[f64], f: impl Fn(f64) -> String) -> Vec<String> {
+    let s: Vec<String> = xs.iter().map(|&x| f(x)).collect();
+    let same = (0..s.len()).any(|i| (0..i).any(|j| s[i] == s[j] && xs[i] != xs[j]));
+    match same {
+        true => xs.iter().map(|&x| num(x)).collect(),
+        false => s,
+    }
+}
+
 /// A path of scopes as text.
 pub fn path(p: &crate::records::Path) -> String {
     name(p.iter().map(|s| s.0))

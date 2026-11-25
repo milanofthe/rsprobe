@@ -2,6 +2,7 @@
 
 use crate::context::Shared;
 use crate::site::lock;
+use crate::units::time;
 use crate::{Event, Kind, Level};
 use std::fmt::{self, Display, Formatter};
 use std::io::{IsTerminal, Write};
@@ -47,37 +48,42 @@ impl Display for Path<'_> {
     }
 }
 
-/// `path: text`, or `text` at the root.
+/// `path  text`, or `text` at the root.
 pub(crate) struct Line<'a, P>(pub(crate) &'a Event, pub(crate) &'a P);
 
 impl<P: Display> Display for Line<'_, P> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self.0.node {
             0 => write!(f, "{}", self.0.kind),
-            _ => write!(f, "{}: {}", self.1, self.0.kind),
+            _ => write!(f, "{}  {}", self.1, self.0.kind),
         }
     }
 }
 
-/// Seconds since the context was built, level and [`Line`].
+/// Width of the time column of a line: the widest time below 1000 hours,
+/// `999:59:59`.
+const TIME_WIDTH: usize = 9;
+
+/// The time since the context was built (see [`units`](crate::units)), the
+/// level and [`Line`].
 struct Stamped<'a, P>(&'a Event, &'a P);
 
 impl<P: Display> Display for Stamped<'_, P> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let (s, level) = (self.0.time as f64 * 1e-9, self.0.level.name());
-        write!(f, "{s:11.6} {level:<5} {}", Line(self.0, self.1))
+        let (t, level) = (time(self.0.time as f64), self.0.level.name());
+        write!(f, "{t:>TIME_WIDTH$}  {level:<5} {}", Line(self.0, self.1))
     }
 }
 
 impl Event {
     /// The event at `path` without time and level, for a host that shows
-    /// those itself: `a/b: text`, the text alone at the root.
+    /// those itself: `a/b  text`, the text alone at the root.
     pub fn text<'a, P: Display>(&'a self, path: &'a P) -> impl Display + 'a {
         Line(self, path)
     }
 
     /// The line [`Stderr`] writes for the event at `path`, for a host that
-    /// drains a [`Buffer`]: `   0.013880 warn  a/b: text`.
+    /// drains a [`Buffer`]: `  13.9 us  warn  a/b  text`.
     pub fn line<'a, P: Display>(&'a self, path: &'a P) -> impl Display + 'a {
         Stamped(self, path)
     }
