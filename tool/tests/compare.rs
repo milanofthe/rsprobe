@@ -11,10 +11,6 @@ use rsprobe_tool::Run;
 
 const ROUNDS: usize = 10;
 
-/// ROUNDS records: a node `work` of 0.9 ms and a `rest` of 0.1 ms, the
-/// work's time times (1 + shift) and every time times a normal factor of the
-/// given relative noise; in `work` a noisy measure `wait` of a tenth of its
-/// time.
 fn records(shift: f64, noise: f64, seed: u64, iterations: u64, extra: bool) -> Vec<Run> {
     let mut g = Gauss::new(seed);
     let hand = Hand {
@@ -83,9 +79,11 @@ fn intervals_are_reproducible_and_hold_the_ratio_of_medians() {
 
 #[test]
 fn a_noisy_measure_of_the_program_is_compared_with_an_interval() {
-    // it differs from round to round: no exact difference, a verdict
     let c = compare(&set(0.0, 0.01, 1), &set(0.10, 0.01, 2), None, &GATE);
-    assert!(c.nondeterministic.is_empty());
+    assert!(
+        c.nondeterministic.is_empty(),
+        "a measure that differs from round to round gets a verdict, not an exact difference"
+    );
     assert_eq!(verdict(&c, "work", "wait"), "slower");
     assert!(!gated(&c).contains(&("work".into(), "wait")));
     let c = compare(&set(0.0, 0.05, 3), &set(0.01, 0.05, 4), None, &GATE);
@@ -112,17 +110,19 @@ fn aa_band() {
     let c = compare(&a, &set(0.10, 0.01, 2), Some(&aa), &GATE);
     assert_eq!(verdict(&c, "work", "wall"), "slower");
     assert!(text(&c).contains("A/A"));
-    // A 5 percent shift at 1 percent noise sits beyond a band of A/A sets at
-    // 1 percent noise (about 2 percent wide), and inside one of sets at 5
-    // percent (about 6 percent).
     let b5 = set(0.05, 0.01, 6);
     assert_eq!(
         verdict(&compare(&a, &b5, Some(&aa), &GATE), "work", "wall"),
-        "slower"
+        "slower",
+        "a 5 percent shift lies beyond the band of A/A sets at 1 percent noise"
     );
     let (n, n2) = (set(0.0, 0.05, 7), set(0.0, 0.05, 8));
     let c = compare(&n, &b5, Some(&n2), &GATE);
-    assert_eq!(verdict(&c, "work", "wall"), "within noise");
+    assert_eq!(
+        verdict(&c, "work", "wall"),
+        "within noise",
+        "a 5 percent shift lies inside the band of A/A sets at 5 percent noise"
+    );
 }
 
 #[test]
@@ -140,10 +140,12 @@ fn exact_difference_is_always_reported() {
         .collect();
     assert_eq!(exact, [("work".to_string(), "iterations", 10.0, 11.0)]);
     assert!(text(&c).contains("iterations   10 -> 11"));
-    // a difference the rounding of a count would hide is written exactly
     let a = records(0.0, 0.05, 3, 4_000_000, false);
     let c = compare(&a, &records(0.0, 0.05, 4, 4_000_001, false), None, &GATE);
-    assert!(text(&c).contains("iterations   4000000 -> 4000001"));
+    assert!(
+        text(&c).contains("iterations   4000000 -> 4000001"),
+        "a difference that the rounding of a count would hide is written exactly"
+    );
     let c = compare(&a, &records(0.0, 0.05, 4, 5_000_000, false), None, &GATE);
     assert!(text(&c).contains("iterations   4.00 M -> 5.00 M"));
 }
@@ -195,7 +197,6 @@ fn structure_change() {
 
 #[test]
 fn pool_alone_does_not_fail_the_default_gate() {
-    // a section whose workers wait longer: pool 30 percent up, wall equal
     let pool = |busy: f64, seed| {
         let mut g = Gauss::new(seed);
         let mut draw = |x: f64| (x * g.draw(1.0, 0.01)).round() as u64;

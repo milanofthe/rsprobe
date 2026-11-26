@@ -38,17 +38,12 @@ pub struct Comparison {
     pub band: String,
 }
 
-/// The value of measure x at a node in each record of a set, zero where the
-/// node is absent.
 fn series(set: &[Corrected], p: &Path, x: &str) -> Vec<f64> {
     set.iter()
         .map(|n| n.0.get(p).map_or(0.0, |v| v.get(x)))
         .collect()
 }
 
-/// Half-width of the noise band in log ratio at a node and measure: the
-/// farther bound of the A/A interval when an A/A set is given, never below
-/// MIN_EFFECT.
 fn band(aa: Option<(&[Corrected], &[Corrected])>, p: &Path, x: &str) -> f64 {
     let floor = (1.0 + MIN_EFFECT).ln();
     let Some((a, a2)) = aa else { return floor };
@@ -245,7 +240,6 @@ pub fn text(c: &Comparison) -> String {
     out.join("\n")
 }
 
-/// The gate's rule as a footer line.
 fn rule(c: &Comparison) -> String {
     format!(
         "gate rule: fails where a node of at least {}% of the run is slower beyond the band in {}; other measures get a verdict only, --gate MEASURE adds one",

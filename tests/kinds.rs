@@ -2,16 +2,15 @@
 //! thread's values in the record.
 #![cfg(feature = "on")]
 
+mod common;
+
+use common::get;
 use rsprobe::{add, current, max, scope, Alloc, Context, Handle, Record};
 use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
 use std::sync::OnceLock;
 
 #[global_allocator]
 static A: Alloc = Alloc::new();
-
-fn get(r: &Record, path: &[&str], m: &str) -> u64 {
-    r.nodes[r.find(path).unwrap() as usize].get(m)
-}
 
 fn json(r: &Record) -> serde_json::Value {
     serde_json::from_str(&r.to_string()).unwrap()
@@ -48,8 +47,6 @@ fn max_keeps_the_largest_value_over_calls_and_threads() {
     assert_eq!(doc["measures"]["functions"], "exact");
 }
 
-/// Runs `work` on `n` threads entered through a handle to a scope `par` of
-/// the calling thread, which allocates nothing while they run.
 fn pool(ctx: &Context, n: u32, work: fn(u32)) {
     let _on = ctx.enter();
     let (handle, done) = (OnceLock::<Handle>::new(), AtomicU32::new(0));
@@ -139,7 +136,6 @@ fn peak_is_the_high_water_mark_above_the_entry_level() {
         }
         drop(a);
         {
-            // Allocated after more was freed than the entry level held.
             let _l = scope!("lower");
             drop(kept);
             drop(std::hint::black_box(vec![1u8; 400]));

@@ -231,7 +231,6 @@ impl Run {
         (f(inner_ns), f(outer_ns))
     }
 
-    /// Nodes by id merged by path.
     fn tree<'a>(&self, nodes: impl Iterator<Item = (usize, &'a Node)>) -> Nodes {
         let max = self.kind("max");
         let mut out = Nodes::default();
@@ -266,7 +265,6 @@ pub fn union<'a>(runs: impl IntoIterator<Item = &'a Run>, f: impl Fn(&Run) -> Se
     runs.into_iter().flat_map(f).collect()
 }
 
-/// A string that lives as long as the process, once per distinct text.
 fn intern(s: &str) -> &'static str {
     static SET: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
     let mut set = SET.lock().unwrap_or_else(|e| e.into_inner());

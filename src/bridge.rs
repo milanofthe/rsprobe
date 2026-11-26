@@ -7,7 +7,6 @@ use crate::{Event, Kind, Level, Path, Sink};
 use std::cell::Cell;
 
 thread_local! {
-    /// Set while [`LogSink`] passes a record to the logger on this thread.
     static FORWARDING: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -20,7 +19,8 @@ pub struct Logger;
 
 impl log::Log for Logger {
     fn enabled(&self, m: &log::Metadata) -> bool {
-        m.level() as u8 <= crate::site::MAX.load(std::sync::atomic::Ordering::Relaxed)
+        m.level() as u8
+            <= crate::site::HIGHEST_LIVE_LEVEL.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn log(&self, r: &log::Record) {

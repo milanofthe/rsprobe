@@ -5,7 +5,6 @@
 use rsprobe::{scope, Buffer, Context, LogSink, Logger};
 use std::sync::Mutex;
 
-/// Keeps the text of each record and passes it on to `rsprobe::Logger`.
 struct Capture(Mutex<Vec<String>>);
 
 impl log::Log for Capture {

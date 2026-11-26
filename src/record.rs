@@ -3,9 +3,17 @@
 use crate::{Event, Site};
 use std::fmt::{self, Display, Formatter, Write};
 
-/// The cost of an empty scope, timed when the context was created (zero
-/// without the feature `on` or without a clock). Nothing is subtracted from
-/// the recorded values.
+/// The cost of an empty scope, timed when the record is taken (zero without
+/// the feature `on` or without a clock). Nothing is subtracted from the
+/// recorded values.
+///
+/// Both constants are means over a pass of empty scopes, timed after a pass
+/// of the same count that warms the caches. A scope costs 45 ns with the
+/// default clock (examples/bench.rs on a Ryzen 9 9900X under Linux and on an
+/// Apple M3), so a pass takes about 0.2 ms. The constants are means and not
+/// minima because the clock of Apple Silicon ticks every 42 ns, about the
+/// cost of a scope, and a minimum over short rounds was measured to return
+/// an inner constant of 0.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Calibration {
     /// Elapsed time an empty scope records as its own, in ns.
@@ -150,7 +158,6 @@ impl Record {
     }
 }
 
-/// A JSON string literal.
 pub(crate) struct Str<'a>(pub(crate) &'a str);
 
 impl Display for Str<'_> {
@@ -168,8 +175,6 @@ impl Display for Str<'_> {
     }
 }
 
-/// A JSON number; `null` where not finite. `Display` of `f64` is the shortest
-/// form that parses back to the same value.
 struct Num(f64);
 
 impl Display for Num {
@@ -181,12 +186,10 @@ impl Display for Num {
     }
 }
 
-/// `null` or the number.
 pub(crate) fn opt(v: Option<u32>) -> String {
     v.map_or("null".into(), |v| v.to_string())
 }
 
-/// Writes `items` with `each`, separated by commas.
 pub(crate) fn list<W: Write, T>(
     w: &mut W,
     items: impl IntoIterator<Item = T>,

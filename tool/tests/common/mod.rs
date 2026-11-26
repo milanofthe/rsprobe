@@ -1,6 +1,8 @@
 //! Records built by hand for the tests.
 #![allow(dead_code)]
 
+pub mod constants;
+
 use rsprobe::{Calibration, Level, Node, Param, Record, Site};
 use rsprobe_tool::Run;
 

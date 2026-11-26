@@ -12,23 +12,20 @@ use std::hint::black_box;
 use std::sync::Barrier;
 use std::time::Instant;
 
-/// Rounds per case; the median is printed.
 const ROUNDS: usize = 21;
-/// Iterations per round: about 1 to 5 ms per round at the measured costs.
-const N: u32 = 100_000;
+const ITERATIONS_PER_ROUND: u32 = 100_000;
 
 #[global_allocator]
 static A: Alloc = Alloc::new();
 
-/// Median over rounds of the time per call of `f`, in ns.
-fn time(per: u32, f: impl Fn(u32)) -> f64 {
+fn median_ns_per_call(per: u32, f: impl Fn(u32)) -> f64 {
     let mut v: Vec<f64> = (0..ROUNDS)
         .map(|_| {
             let t = Instant::now();
-            for i in 0..N {
+            for i in 0..ITERATIONS_PER_ROUND {
                 f(black_box(i));
             }
-            t.elapsed().as_nanos() as f64 / (N * per) as f64
+            t.elapsed().as_nanos() as f64 / (ITERATIONS_PER_ROUND * per) as f64
         })
         .collect();
     v.sort_by(f64::total_cmp);
@@ -50,8 +47,7 @@ fn nested(_: u32) {
     let _d = scope!("n4");
 }
 
-/// Five DEBUG sites, as a pool's serial section carries.
-fn five(i: u32) {
+fn five_debug_sites(i: u32) {
     add!(DEBUG, "a", i);
     add!(DEBUG, "b", i);
     time!(DEBUG, "c", i);
@@ -59,9 +55,7 @@ fn five(i: u32) {
     debug!("{i}");
 }
 
-/// Median over rounds of the mean over `n` threads of the time per entry of
-/// `h` with a scope inside, in ns; the threads start each round together.
-fn entries(n: usize, h: Handle) -> f64 {
+fn median_ns_per_entry_and_scope(n: usize, h: Handle) -> f64 {
     let mut v: Vec<f64> = (0..ROUNDS)
         .map(|_| {
             let go = Barrier::new(n);
@@ -72,11 +66,11 @@ fn entries(n: usize, h: Handle) -> f64 {
                             drop(h.enter());
                             go.wait();
                             let t = Instant::now();
-                            for _ in 0..N {
+                            for _ in 0..ITERATIONS_PER_ROUND {
                                 let _g = h.enter();
                                 let _s = scope!("task");
                             }
-                            t.elapsed().as_nanos() as f64 / N as f64
+                            t.elapsed().as_nanos() as f64 / ITERATIONS_PER_ROUND as f64
                         })
                     })
                     .collect();
@@ -89,28 +83,24 @@ fn entries(n: usize, h: Handle) -> f64 {
     v[ROUNDS / 2]
 }
 
-/// An allocation and a free of `size` bytes through `a`.
 fn alloc_free(a: &impl GlobalAlloc, size: usize) {
     let l = Layout::from_size_align(size, 8).unwrap();
     // SAFETY: a non-zero size; the block is freed with its layout.
     unsafe { a.dealloc(black_box(a.alloc(l)), l) }
 }
 
-/// Median over rounds of the time per allocation and free of 16 B through
-/// `A` where all `N` blocks are held before the first is freed: every
-/// allocation raises this thread's live bytes to a new high-water mark.
-fn rising() -> f64 {
+fn median_ns_per_alloc_free_at_rising_peak() -> f64 {
     let l = Layout::from_size_align(16, 8).unwrap();
-    let mut held = Vec::with_capacity(N as usize);
+    let mut held = Vec::with_capacity(ITERATIONS_PER_ROUND as usize);
     let mut v: Vec<f64> = (0..ROUNDS)
         .map(|_| {
             let t = Instant::now();
             // SAFETY: a non-zero size; each block is freed with its layout.
             unsafe {
-                held.extend((0..N).map(|_| black_box(A.alloc(l))));
+                held.extend((0..ITERATIONS_PER_ROUND).map(|_| black_box(A.alloc(l))));
                 held.drain(..).for_each(|p| A.dealloc(p, l));
             }
-            t.elapsed().as_nanos() as f64 / N as f64
+            t.elapsed().as_nanos() as f64 / ITERATIONS_PER_ROUND as f64
         })
         .collect();
     v.sort_by(f64::total_cmp);
@@ -119,54 +109,63 @@ fn rising() -> f64 {
 
 fn main() {
     println!("{:<40} {:>8}", "case", "ns");
-    // Warm-up: the first case timed is otherwise 1 to 3 ns slower.
-    time(1, |_| alloc_free(&System, 16));
+    let _warm_up = median_ns_per_call(1, |_| alloc_free(&System, 16));
     for size in [16, 65536] {
         row(
             &format!("alloc+free {size} B, System"),
-            time(1, |_| alloc_free(&System, size)),
+            median_ns_per_call(1, |_| alloc_free(&System, size)),
         );
         row(
             &format!("alloc+free {size} B, Alloc"),
-            time(1, |_| alloc_free(&A, size)),
+            median_ns_per_call(1, |_| alloc_free(&A, size)),
         );
     }
-    row("alloc+free 16 B, Alloc, rising peak", rising());
+    row(
+        "alloc+free 16 B, Alloc, rising peak",
+        median_ns_per_alloc_free_at_rising_peak(),
+    );
     if cfg!(not(feature = "on")) {
-        row("scope, feature off", time(1, flat));
-        row("add!, feature off", time(1, |i| add!("n", i)));
+        row("scope, feature off", median_ns_per_call(1, flat));
+        row("add!, feature off", median_ns_per_call(1, |i| add!("n", i)));
         return;
     }
-    row("scope, no context", time(1, flat));
+    row("scope, no context", median_ns_per_call(1, flat));
     row(
         "current(), no context",
-        time(1, |_| {
+        median_ns_per_call(1, |_| {
             black_box(current());
         }),
     );
-    row("five DEBUG sites, no context", time(1, five));
+    row(
+        "five DEBUG sites, no context",
+        median_ns_per_call(1, five_debug_sites),
+    );
     let nothing = current();
     row(
         "Handle::enter, no context",
-        time(1, |_| drop(nothing.enter())),
+        median_ns_per_call(1, |_| drop(nothing.enter())),
     );
     let ctx = Context::new();
     let _on = ctx.enter();
     let h = current();
     row(
         "Handle::enter, context on another thread",
-        std::thread::scope(|s| s.spawn(|| time(1, |_| drop(h.enter()))).join().unwrap()),
+        std::thread::scope(|s| {
+            s.spawn(|| median_ns_per_call(1, |_| drop(h.enter())))
+                .join()
+                .unwrap()
+        }),
     );
     let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
     for n in [1, 4, 16].into_iter().filter(|&n| n <= cpus) {
         row(
             &format!("Handle::enter + scope, {n} threads"),
-            entries(n, h),
+            median_ns_per_entry_and_scope(n, h),
         );
     }
     row(
         "scope, below the threshold",
-        time(1, |_| {
+        median_ns_per_call(1, |_| {
             let _s = scope!(DEBUG, "fine");
         }),
     );
@@ -174,22 +173,28 @@ fn main() {
         let _other = Context::builder().threshold(Level::TRACE).build();
         row(
             "scope, below this context, other at TRACE",
-            time(1, |_| {
+            median_ns_per_call(1, |_| {
                 let _s = scope!(DEBUG, "fine");
             }),
         );
     }
-    row("scope, on, flat", time(1, flat));
-    row("scope, on, nested 4 deep", time(4, nested));
-    row("add!, on", time(1, |i| add!("n", i)));
-    row("max!, on, rising", time(1, |i| max!("m", i)));
-    row("message, below the threshold", time(1, |i| debug!("{i}")));
-    row("message, on, no sink", time(1, |i| info!("{i}")));
+    row("scope, on, flat", median_ns_per_call(1, flat));
+    row("scope, on, nested 4 deep", median_ns_per_call(4, nested));
+    row("add!, on", median_ns_per_call(1, |i| add!("n", i)));
+    row("max!, on, rising", median_ns_per_call(1, |i| max!("m", i)));
+    row(
+        "message, below the threshold",
+        median_ns_per_call(1, |i| debug!("{i}")),
+    );
+    row(
+        "message, on, no sink",
+        median_ns_per_call(1, |i| info!("{i}")),
+    );
     {
         let streamed = Context::builder().stream().build();
         let _on = streamed.enter();
-        row("scope, on, flat, stream", time(1, flat));
-        row("add!, on, stream", time(1, |i| add!("n", i)));
+        row("scope, on, flat, stream", median_ns_per_call(1, flat));
+        row("add!, on, stream", median_ns_per_call(1, |i| add!("n", i)));
     }
     let c = ctx.record().calibration;
     row("calibration inner", c.inner_ns);

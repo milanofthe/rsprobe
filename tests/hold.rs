@@ -5,7 +5,6 @@ use rsprobe::{active, current, scope, Context, Event, Handle, Level, Path, Sink}
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{mpsc, Arc};
 
-/// Marks the drop of the context that owns it.
 struct Freed(Arc<AtomicBool>);
 
 impl Sink for Freed {
@@ -14,14 +13,14 @@ impl Sink for Freed {
 
 impl Drop for Freed {
     fn drop(&mut self) {
+        let _borrows_the_thread_state = current();
         self.0.store(true, SeqCst);
     }
 }
 
-/// Runs three tasks of a context on a worker, drops the context and lets the
-/// worker run `then` with the handles of the context and of another one;
-/// whether the context was freed before and after `then`.
-fn hold(then: impl FnOnce(Handle, Handle) + Send + 'static) -> (bool, bool) {
+fn freed_before_and_after_worker_runs(
+    then: impl FnOnce(Handle, Handle) + Send + 'static,
+) -> (bool, bool) {
     let freed = Arc::new(AtomicBool::new(false));
     let ctx = Context::builder().sink(Freed(freed.clone())).build();
     let other = Context::new();
@@ -61,17 +60,42 @@ fn hold(then: impl FnOnce(Handle, Handle) + Send + 'static) -> (bool, bool) {
 
 #[test]
 fn a_worker_lets_go_when_it_enters_another_context() {
-    let (before, after) = hold(|_, o| drop(o.enter()));
+    let (before, after) = freed_before_and_after_worker_runs(|_, o| drop(o.enter()));
     assert!(!before && after);
 }
 
 #[test]
 fn a_worker_lets_go_when_it_enters_a_dropped_context() {
-    let (before, after) = hold(|h, _| {
+    let (before, after) = freed_before_and_after_worker_runs(|h, _| {
         let _g = h.enter();
         assert!(!active!());
     });
     assert!(!before && after);
+}
+
+#[test]
+fn a_worker_lets_go_when_its_guard_drops_after_the_context() {
+    let freed = Arc::new(AtomicBool::new(false));
+    let ctx = Context::builder().sink(Freed(freed.clone())).build();
+    let _keeps_sites_active = Context::new();
+    let h = {
+        let _on = ctx.enter();
+        current()
+    };
+    let (go, wait) = mpsc::channel();
+    let (done, entered) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let g = h.enter();
+        done.send(()).unwrap();
+        wait.recv().unwrap();
+        drop(g);
+    });
+    entered.recv().unwrap();
+    drop(ctx);
+    assert!(!freed.load(SeqCst));
+    go.send(()).unwrap();
+    worker.join().unwrap();
+    assert!(freed.load(SeqCst));
 }
 
 #[test]

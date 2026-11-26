@@ -8,27 +8,21 @@
 use rsprobe::{add, current, max, now, scope, time, Context};
 use std::hint::black_box;
 
-/// Problem size when not given.
-const N: usize = 2000;
-/// Worker threads when not given.
-const THREADS: usize = 2;
-/// Iterations of the solve.
+const DEFAULT_N: usize = 2000;
+const DEFAULT_THREADS: usize = 2;
 const ITERATIONS: usize = 5;
 
-/// Order n.
 fn assemble(n: usize) -> Vec<f64> {
     let _s = scope!("assemble");
     add!("nonzeros", n);
     (0..n).map(|i| ((i * 7919) % n) as f64).collect()
 }
 
-/// Order n log n.
 fn sort(v: &mut [f64]) {
     let _s = scope!("sort");
     v.sort_by(f64::total_cmp);
 }
 
-/// Order n per iteration, each iteration a scope.
 fn solve(v: &[f64]) -> f64 {
     let _s = scope!("solve");
     let mut x = 0.0;
@@ -40,8 +34,6 @@ fn solve(v: &[f64]) -> f64 {
     x
 }
 
-/// Order n^2, split over worker threads that enter the section's node; the
-/// time the caller waits to join them as `join`.
 fn pairs(v: &[f64], threads: usize) -> f64 {
     let _s = scope!("pairs");
     let h = current();
@@ -72,8 +64,8 @@ fn main() {
     let mut args = std::env::args()
         .skip(1)
         .map(|a| a.parse::<usize>().expect("arguments: N THREADS"));
-    let n = args.next().unwrap_or(N);
-    let threads = args.next().unwrap_or(THREADS);
+    let n = args.next().unwrap_or(DEFAULT_N);
+    let threads = args.next().unwrap_or(DEFAULT_THREADS);
     let trace = std::env::var_os("RSPROBE_TRACE");
     let ctx = match trace {
         Some(_) => Context::builder().stream().build(),

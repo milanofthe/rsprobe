@@ -5,12 +5,12 @@ use crate::record::{opt, Str};
 use crate::Event;
 use std::fmt::{self, Display, Formatter};
 
-/// One entry of a thread's stream buffer.
 pub(crate) enum Item {
-    /// A guard's span at a node.
-    Span { node: u32, start: u64, dur: u64 },
-    /// The thread's value of an `add!` site at a node after an add; a
-    /// counter series per node and thread.
+    Span {
+        node: u32,
+        start: u64,
+        dur: u64,
+    },
     Count {
         site: u32,
         node: u32,
@@ -19,28 +19,21 @@ pub(crate) enum Item {
     },
 }
 
-/// The stream of a context: items flushed by the threads, and events.
 #[derive(Default)]
 pub(crate) struct Stream {
     pub(crate) items: Vec<(u32, Item)>,
     pub(crate) events: Vec<(u32, Event)>,
 }
 
-/// Nanoseconds as microseconds with three decimals.
-struct Us(u64);
+struct NsAsUs(u64);
 
-impl Display for Us {
+impl Display for NsAsUs {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}.{:03}", self.0 / 1000, self.0 % 1000)
     }
 }
 
 impl Stream {
-    /// The Chrome trace event JSON: one "M" event per thread, "X" per span
-    /// with its node and the node's parent (`null` at the root), "i" per
-    /// event, "C" per `add!` (one series per node and thread). `name` names a
-    /// node, `parent` gives its parent, `measure` names an `add!` site. Times
-    /// are written since `origin`.
     pub(crate) fn write(
         &self,
         origin: u64,
@@ -69,8 +62,8 @@ impl Stream {
                 format_args!(
                     "\"ph\":\"X\",\"name\":{},\"ts\":{},\"dur\":{},\"args\":{{\"node\":{node},\"parent\":{}}}",
                     Str(name(node)),
-                    Us(start - origin),
-                    Us(dur),
+                    NsAsUs(start - origin),
+                    NsAsUs(dur),
                     opt(parent(node))
                 ),
             ),
@@ -84,7 +77,7 @@ impl Stream {
                 format_args!(
                     "\"ph\":\"C\",\"name\":{},\"ts\":{},\"args\":{{{}:{value}}}",
                     Str(measure(site)),
-                    Us(time - origin),
+                    NsAsUs(time - origin),
                     Str(&format!("{} {t}", name(node)))
                 ),
             ),
@@ -95,7 +88,7 @@ impl Stream {
                 format_args!(
                     "\"ph\":\"i\",\"s\":\"t\",\"name\":{},\"ts\":{},\"args\":{{\"node\":{},\"level\":\"{}\"}}",
                     Str(&e.kind.to_string()),
-                    Us(e.time),
+                    NsAsUs(e.time),
                     e.node,
                     e.level.name()
                 ),

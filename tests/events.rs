@@ -5,7 +5,6 @@ use rsprobe::{current, debug, info, progress, scope, trace, warn, Buffer, Contex
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
-/// Events of a buffer as (path, text).
 fn drained(b: &Buffer) -> Vec<(String, String)> {
     let mut v = Vec::new();
     b.drain(|e, path| v.push((path.to_string(), e.kind.to_string())));
@@ -47,6 +46,27 @@ fn a_message_lands_at_its_node_also_through_a_handle() {
     assert!(r.find(&["a", "b"]).is_some());
 }
 
+struct EntersAScope;
+
+impl Display for EntersAScope {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let _s = scope!("formatting");
+        f.write_str("formatted")
+    }
+}
+
+#[test]
+fn formatting_a_message_may_enter_a_scope() {
+    let buffer = Buffer::default();
+    let ctx = Context::builder().sink(buffer.clone()).build();
+    {
+        let _on = ctx.enter();
+        info!("{}", EntersAScope);
+    }
+    assert_eq!(drained(&buffer), [("".into(), "formatted".into())]);
+    assert!(ctx.record().find(&["formatting"]).is_some());
+}
+
 mod numeric {
     pub fn work() {
         let _s = rsprobe::scope!(DEBUG, "fine");
@@ -86,7 +106,6 @@ fn a_filter_switches_scopes_and_messages_of_a_module_together() {
     assert_eq!(v, vec![("fine".to_string(), "numeric".to_string()); 2]);
 }
 
-/// Counts how often it is formatted.
 struct Counted<'a>(&'a AtomicU32);
 
 impl Display for Counted<'_> {
@@ -137,7 +156,6 @@ fn warnings_are_deduplicated_and_bounded() {
     assert_eq!(v["warnings_dropped"], 102);
 }
 
-/// Nanoseconds, set by the test of the line.
 static CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[test]
@@ -174,7 +192,6 @@ fn a_sink_takes_events_up_to_its_level_as_stamped_lines() {
     );
 }
 
-/// A sink for a reader: the texts it gets.
 #[derive(Clone, Default)]
 struct Reader(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
 

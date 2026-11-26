@@ -1,40 +1,31 @@
 //! One thread's state of each context it entered, and the fast path of a site.
 
-use crate::alloc::quiet;
-use crate::context::{Clock, Shared, Tree};
-use crate::site::{lock, MAX};
+use crate::alloc::uncounted;
+use crate::context::{Clock, Shared, Tree, BUILTIN};
+use crate::site::{lock, HIGHEST_LIVE_LEVEL};
 use crate::stream::Item;
 use crate::Site;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Weak};
 
-/// Marks no entry, no parent, no site.
 pub(crate) const NONE: u32 = u32::MAX;
 
-/// One thread's built-in measures of one node, in the order of
-/// [`BUILTIN`](crate::context::BUILTIN).
-pub(crate) type Base = [AtomicU64; 10];
+pub(crate) type Base = [AtomicU64; BUILTIN.len()];
 
-/// The current node of a thread.
 #[derive(Clone, Copy)]
 pub(crate) struct Cur {
-    /// Index of the entry in [`Thread::entries`]; [`NONE`] for no context.
     pub(crate) entry: u32,
     pub(crate) node: u32,
-    /// Entered through a handle: a scope adds to `worker_calls` and `busy`, a
-    /// handle guard to `tasks` and `pool`; else to `calls` and `wall`.
-    pub(crate) busy: bool,
+    pub(crate) via_handle: bool,
 }
 
 pub(crate) const IDLE: Cur = Cur {
     entry: NONE,
     node: 0,
-    busy: false,
+    via_handle: false,
 };
 
-/// Every context this thread entered, and the current node. `cur.entry` is
-/// [`NONE`] or an entry with `depth > 0`.
 pub(crate) struct Thread {
     pub(crate) cur: Cur,
     pub(crate) entries: Vec<Entry>,
@@ -45,38 +36,30 @@ thread_local! {
         const { RefCell::new(Thread { cur: IDLE, entries: Vec::new() }) };
 }
 
-/// This thread's state of one context.
 pub(crate) struct Entry {
     pub(crate) id: u64,
     pub(crate) weak: Weak<Shared>,
-    /// Held while a guard of this context is alive on this thread.
     pub(crate) live: Option<Arc<Shared>>,
-    /// Guards of [`Context::enter`](crate::Context::enter) and
-    /// [`Handle::enter`] alive on this thread.
     pub(crate) depth: u32,
     pub(crate) clock: Clock,
-    /// Time this thread spent emitting events of the context, in ns: taken
-    /// out of the spans open meanwhile.
-    pub(crate) out: u64,
-    /// By site id: 0 undecided, 1 inactive, 2 active in this context.
-    active: Vec<u8>,
-    /// Index of this thread among those that entered the context.
+    pub(crate) emitting_ns: u64,
+    activity: Vec<Activity>,
     pub(crate) thread: u32,
-    /// Whether the context keeps a stream, and this thread's items not yet
-    /// flushed to it.
     pub(crate) stream: bool,
     items: Vec<Item>,
-    /// This thread's cells and child cache, by node id.
     nodes: Vec<Local>,
 }
 
-/// This thread's cells of one node and the children it has seen.
+#[derive(Clone, Copy, PartialEq)]
+enum Activity {
+    Undecided,
+    Inactive,
+    Active,
+}
+
 struct Local {
-    /// Null until this thread uses the node.
     base: *const Base,
-    /// (scope site, child node).
     children: Vec<(u32, u32)>,
-    /// (`add!` site, cell).
     extras: Vec<(u32, *const AtomicU64)>,
 }
 
@@ -93,14 +76,10 @@ pub(crate) fn raise(c: &AtomicU64, v: u64) {
 }
 
 impl Entry {
-    /// The shared state, alive while `depth > 0`.
     pub(crate) fn shared(&self) -> &Arc<Shared> {
         self.live.as_ref().expect("entry is current")
     }
 
-    /// A new cell kept by the tree of the shared state, which never drops
-    /// one. A reference to it is valid while a guard of the context is alive
-    /// on this thread.
     fn cell<T: Default>(&self, keep: impl FnOnce(&mut Tree, Box<T>)) -> *const T {
         let b = Box::<T>::default();
         let p: *const T = &*b;
@@ -108,11 +87,10 @@ impl Entry {
         p
     }
 
-    /// This thread's base cells of `node`, allocated on first use.
     #[inline]
     pub(crate) fn base(&mut self, node: u32) -> &Base {
         match self.nodes.get(node as usize) {
-            // SAFETY: as in `cell`.
+            // SAFETY: the context's tree never drops a cell, and a guard on this thread holds the tree.
             Some(l) if !l.base.is_null() => unsafe { &*l.base },
             _ => self.new_base(node),
         }
@@ -131,16 +109,15 @@ impl Entry {
         if self.nodes[n].base.is_null() {
             self.nodes[n].base = self.cell(|t, b| t.bases.push((self.thread, node, b)));
         }
-        // SAFETY: as in `cell`.
+        // SAFETY: the context's tree never drops a cell, and a guard on this thread holds the tree.
         unsafe { &*self.nodes[n].base }
     }
 
-    /// The child of `node` for a scope site, interned on first use.
     pub(crate) fn child(&mut self, node: u32, site: u32) -> u32 {
         let local = &self.nodes[node as usize];
         match local.children.iter().find(|c| c.0 == site) {
             Some(&(_, c)) => c,
-            None => quiet(|| self.intern(node, site)),
+            None => uncounted(|| self.intern(node, site)),
         }
     }
 
@@ -152,12 +129,11 @@ impl Entry {
         c
     }
 
-    /// This thread's cell of an `add!` site at `node`, allocated on first use.
     fn extra(&mut self, node: u32, site: u32) -> *const AtomicU64 {
         let local = &self.nodes[node as usize];
         match local.extras.iter().find(|e| e.0 == site) {
             Some(&(_, p)) => p,
-            None => quiet(|| self.new_extra(node, site)),
+            None => uncounted(|| self.new_extra(node, site)),
         }
     }
 
@@ -169,25 +145,22 @@ impl Entry {
         p
     }
 
-    /// Appends an item to this thread's stream items.
     #[inline]
     pub(crate) fn push(&mut self, item: Item) {
-        quiet(|| self.items.push(item));
+        uncounted(|| self.items.push(item));
     }
 
-    /// Moves this thread's stream items to the context's stream.
     pub(crate) fn flush(&mut self) {
         if let Some(s) = self.live.as_ref().and_then(|l| l.stream.as_ref()) {
             let t = self.thread;
-            quiet(|| lock(s).items.extend(self.items.drain(..).map(|i| (t, i))));
+            uncounted(|| lock(s).items.extend(self.items.drain(..).map(|i| (t, i))));
         }
     }
 
-    /// Whether `site` is active in this context, decided on first use.
     #[inline]
     fn active(&mut self, site: &Site, id: u32) -> bool {
-        match self.active.get(id as usize) {
-            Some(&d) if d != 0 => d == 2,
+        match self.activity.get(id as usize) {
+            Some(&a) if a != Activity::Undecided => a == Activity::Active,
             _ => self.decide(site, id as usize),
         }
     }
@@ -196,18 +169,20 @@ impl Entry {
     #[inline(never)]
     fn decide(&mut self, site: &Site, id: usize) -> bool {
         let on = site.level <= self.shared().level(site.module);
-        if self.active.len() <= id {
-            quiet(|| self.active.resize(id + 1, 0));
+        if self.activity.len() <= id {
+            uncounted(|| self.activity.resize(id + 1, Activity::Undecided));
         }
-        self.active[id] = 1 + on as u8;
+        self.activity[id] = if on {
+            Activity::Active
+        } else {
+            Activity::Inactive
+        };
         on
     }
 }
 
 impl Thread {
-    /// Index of this thread's entry of `shared`, created on first use (through
-    /// a handle if `busy`) in the slot of a dropped context or appended.
-    pub(crate) fn entry(&mut self, shared: &Arc<Shared>, busy: bool) -> usize {
+    pub(crate) fn entry(&mut self, shared: &Arc<Shared>, via_handle: bool) -> usize {
         if let Some(i) = self.entries.iter().position(|e| e.id == shared.id) {
             return i;
         }
@@ -217,9 +192,9 @@ impl Thread {
             live: None,
             depth: 0,
             clock: shared.cfg.clock,
-            out: 0,
-            active: Vec::new(),
-            thread: lock(&shared.tree).thread(busy),
+            emitting_ns: 0,
+            activity: Vec::new(),
+            thread: lock(&shared.tree).thread(via_handle),
             stream: shared.stream.is_some(),
             items: Vec::new(),
             nodes: Vec::new(),
@@ -236,26 +211,23 @@ impl Thread {
         }
     }
 
-    /// The current node, the current entry and the site id if `site` is
-    /// active in the current context.
     #[inline(always)]
     pub(crate) fn site(&mut self, site: &'static Site) -> Option<(&mut Cur, &mut Entry, u32)> {
         let Thread { cur, entries } = self;
         let e = entries.get_mut(cur.entry as usize)?;
+        debug_assert!(e.depth > 0 && e.live.is_some(), "the current entry is held");
         let id = site.id();
         e.active(site, id).then_some((cur, e, id))
     }
 }
 
 impl Site {
-    /// Runs `f` on the current node, the current entry and the site id if
-    /// this site is active in the current context.
     #[inline(always)]
     pub(crate) fn active<R>(
         &'static self,
         f: impl FnOnce(&mut Cur, &mut Entry, u32) -> R,
     ) -> Option<R> {
-        if self.level.0 > MAX.load(Relaxed) {
+        if self.level.0 > HIGHEST_LIVE_LEVEL.load(Relaxed) {
             return None;
         }
         THREAD.with(|t| {
@@ -290,11 +262,8 @@ impl Site {
     fn put(&'static self, value: impl FnOnce() -> u64, op: fn(&AtomicU64, u64)) {
         let cell = self.active(|cur, e, id| (e.stream, cur.node, id, e.extra(cur.node, id)));
         if let Some((stream, node, site, c)) = cell {
-            // The value is evaluated outside the borrow, so it may enter
-            // scopes itself.
             let v = value();
-            // SAFETY: as in `Entry::cell`; the guard that made the entry
-            // current outlives this call.
+            // SAFETY: the context's tree never drops a cell, and a guard on this thread holds the tree.
             let c = unsafe { &*c };
             op(c, v);
             if stream {
@@ -304,7 +273,6 @@ impl Site {
     }
 }
 
-/// Appends the value of an `add!` site to this thread's stream items.
 #[cold]
 fn count(site: u32, node: u32, value: u64) {
     THREAD.with(|t| {
@@ -321,7 +289,6 @@ fn count(site: u32, node: u32, value: u64) {
     })
 }
 
-/// Runs `f` on the current node and entry if a context is current.
 #[inline(always)]
 pub(crate) fn with_current<R>(f: impl FnOnce(&mut Cur, &mut Entry) -> R) -> Option<R> {
     THREAD.with(|t| {

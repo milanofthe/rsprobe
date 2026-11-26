@@ -1,0 +1,5 @@
+library = ["src/**"]
+
+[allow]
+environment = ["RECORD_ENV", "NO_COLOR"]
+unwrap = ["entry is current"]

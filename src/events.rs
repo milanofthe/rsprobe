@@ -1,15 +1,17 @@
 //! Events: messages and progress at the current node.
 
-use crate::alloc::quiet;
+use crate::alloc::uncounted;
 use crate::context::Shared;
 use crate::sinks::Path;
 use crate::site::lock;
-use crate::thread::with_current;
+use crate::thread::{with_current, NONE};
 use crate::{Level, Sink, Site};
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-/// What an event carries.
+/// What an event carries. Its `Display` is the text of a message, and for
+/// progress `done/total` (`done` alone where the total is not known) followed
+/// by the text.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     /// A formatted message.
@@ -26,8 +28,6 @@ pub enum Kind {
 }
 
 impl Display for Kind {
-    /// The text of a message; for progress `done/total` (`done` alone
-    /// where the total is not known) and its text.
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Kind::Message(t) => f.write_str(t),
@@ -64,7 +64,6 @@ pub struct Event {
     pub kind: Kind,
 }
 
-/// Distinct events at WARN and above, with their counts.
 #[derive(Default)]
 pub(crate) struct Warnings {
     pub(crate) kept: Vec<(Event, u64)>,
@@ -72,16 +71,10 @@ pub(crate) struct Warnings {
 }
 
 impl Warnings {
-    /// Counts `e` with an earlier event of the same site and text, or keeps
-    /// it while fewer than [`WARNINGS`](crate::WARNINGS) are kept. Returns
-    /// what the sinks are to be told: nothing at the first event of a site
-    /// and text, the count when it reaches a power of ten, and the number of
-    /// events not kept when that reaches one; `None` for the events between,
-    /// which the sinks do not get.
-    fn add(&mut self, e: &Event) -> Option<String> {
+    fn count_and_suffix_for_sinks(&mut self, e: &Event) -> Option<String> {
         let same =
             |k: &Event| (k.file, k.line, k.module, &k.kind) == (e.file, e.line, e.module, &e.kind);
-        let full = self.kept.len() >= crate::WARNINGS;
+        let full = self.kept.len() >= crate::WARNINGS_KEPT;
         let (n, kept) = match self.kept.iter_mut().find(|k| same(&k.0)) {
             Some(k) => {
                 k.1 += 1;
@@ -99,21 +92,11 @@ impl Warnings {
         (10u64.pow(n.ilog10()) == n).then(|| match (kept, n) {
             (true, 1) => String::new(),
             (true, _) => format!(" ({n} times)"),
-            (false, _) => format!(" (not kept, {n} beyond {} distinct)", crate::WARNINGS),
+            (false, _) => format!(" (not kept, {n} beyond {} distinct)", crate::WARNINGS_KEPT),
         })
     }
 }
 
-/// Emits the event `kind()` at `node` of `shared` from the thread of index
-/// `thread`; `kind` is called outside the thread-local state. The event is
-/// kept among the warnings if its level is WARN or above, in the stream if
-/// there is one, and passed to every sink of its level; with none of the
-/// three `kind` is not called. Of the events at WARN and above with the same
-/// site and text a sink gets the first, the tenth, the hundredth and so on,
-/// with the count appended, unless it takes [`every`](Sink::every) event.
-/// Its allocations, and those of the sinks, are
-/// not counted by [`Alloc`](crate::Alloc); its time is the measure `emit` of
-/// the node and not part of the spans open on this thread.
 pub(crate) fn emit(
     (shared, node, thread): (Arc<Shared>, u32, u32),
     (level, module, file, line): (Level, &'static str, &'static str, u32),
@@ -124,7 +107,7 @@ pub(crate) fn emit(
     {
         return;
     }
-    quiet(|| {
+    uncounted(|| {
         let clock = shared.cfg.clock;
         let begin = clock();
         let e = Event {
@@ -139,12 +122,11 @@ pub(crate) fn emit(
         if let Some(s) = &shared.stream {
             lock(s).events.push((thread, e.clone()));
         }
-        let repeat = match (level <= Level::WARN, &e.kind) {
-            (true, Kind::Message(_)) => lock(&shared.warnings).add(&e),
+        let suffix = match (level <= Level::WARN, &e.kind) {
+            (true, Kind::Message(_)) => lock(&shared.warnings).count_and_suffix_for_sinks(&e),
             _ => Some(String::new()),
         };
-        // The event with the count in its text, where it has one.
-        let counted = repeat.as_ref().filter(|r| !r.is_empty()).map(|r| Event {
+        let counted = suffix.as_ref().filter(|r| !r.is_empty()).map(|r| Event {
             kind: Kind::Message(format!("{}{r}", e.kind)),
             ..e.clone()
         });
@@ -155,66 +137,51 @@ pub(crate) fn emit(
         for s in shared.cfg.sinks.iter().filter(shown) {
             if s.1.every() {
                 s.1.event(&e, &path);
-            } else if repeat.is_some() {
+            } else if suffix.is_some() {
                 s.1.event(counted.as_ref().unwrap_or(&e), &path);
             }
         }
         let ns = clock() - begin;
-        with_current(|_, e| e.out += ns);
+        with_current(|_, e| e.emitting_ns += ns);
         crate::time!(ERROR, "emit", ns);
     })
 }
 
-/// A progress site of a context and its current run, times in ns since the
-/// context was built.
 pub(crate) struct Paced {
-    /// File and line of the site, and for a site without a total the
-    /// thread: a count without a total is one loop's own.
-    site: (&'static str, u32, u32),
-    /// Whether a run is going: begun by an event and not closed.
+    file_line_thread: (&'static str, u32, u32),
     running: bool,
-    /// When the run began or its last event passed, whichever is later.
-    since: u64,
-    /// Whether an event of the run passed.
-    open: bool,
-    /// Units done at the site's last event.
-    done: u64,
+    since_ns: u64,
+    any_passed: bool,
+    last_done: u64,
 }
 
-/// Whether the progress event of the site at (file, line) with `done` of
-/// `total` units passes now, by the rule of
-/// [`Builder::progress_interval`](crate::Builder::progress_interval).
-fn due(shared: &Shared, site: (&'static str, u32, u32), done: u64, total: u64) -> bool {
+fn due(shared: &Shared, file_line_thread: (&'static str, u32, u32), done: u64, total: u64) -> bool {
     let mut sites = lock(&shared.progress);
-    // Read under the lock: the clock does not decrease, so no thread stores
-    // a later `since` between this read and its use.
     let now = (shared.cfg.clock)() - shared.start;
     let i = sites
         .iter()
-        .position(|s| s.site == site)
+        .position(|s| s.file_line_thread == file_line_thread)
         .unwrap_or_else(|| {
             sites.push(Paced {
-                site,
+                file_line_thread,
                 running: false,
-                since: 0,
-                open: false,
-                done: 0,
+                since_ns: 0,
+                any_passed: false,
+                last_done: 0,
             });
             sites.len() - 1
         });
     let s = &mut sites[i];
-    // A run begins with the first event after a closing one, and without a
-    // total where the units go down. With a total they may arrive out of
-    // order from the threads of one run.
-    if !s.running || (total == 0 && done < s.done) {
-        (s.running, s.since, s.open) = (true, now, false);
+    let count_went_down = total == 0 && done < s.last_done;
+    if !s.running || count_went_down {
+        (s.running, s.since_ns, s.any_passed) = (true, now, false);
     }
-    let last = total > 0 && done >= total;
-    let pass = now - s.since >= shared.cfg.progress || (last && s.open);
+    let closing = total > 0 && done >= total;
+    let pass = now - s.since_ns >= shared.cfg.progress || (closing && s.any_passed);
     if pass {
-        (s.since, s.open) = (now, true);
+        (s.since_ns, s.any_passed) = (now, true);
     }
-    (s.done, s.running) = (done, !last);
+    (s.last_done, s.running) = (done, !closing);
     pass
 }
 
@@ -241,10 +208,8 @@ impl Site {
         let here = self.active(|cur, e, _| (e.shared().clone(), cur.node, e.thread));
         if let Some(here) = here {
             let (done, total) = units();
-            // With a total the threads of a pool report one run; without
-            // one each thread's loop is a run of its own.
-            let thread = if total > 0 { u32::MAX } else { here.2 };
-            if due(&here.0, (self.file, self.line, thread), done, total) {
+            let run_thread = if total > 0 { NONE } else { here.2 };
+            if due(&here.0, (self.file, self.line, run_thread), done, total) {
                 let site = (self.level, self.module, self.file, self.line);
                 emit(here, site, || Kind::Progress {
                     done,

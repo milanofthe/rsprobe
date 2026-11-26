@@ -68,7 +68,6 @@ pub fn load(path: &str) -> Result<Vec<Span>> {
 /// A path of scope names from the root.
 pub type Names = Vec<String>;
 
-/// {node id: path}; a node whose parent has no span hangs at the root.
 fn paths(spans: &[Span]) -> Map<u64, Names> {
     let mut names: Map<u64, (&str, Option<u64>)> = Map::default();
     for s in spans {
@@ -91,17 +90,12 @@ fn paths(spans: &[Span]) -> Map<u64, Names> {
     out
 }
 
-/// An element of a chain: a span (its index) or a gap (start, end).
 #[derive(Clone, Copy, Debug)]
 enum Element {
     Span(usize),
     Gap(i64, i64),
 }
 
-/// The critical chain of `inst` among `kids` (the spans of its node's
-/// children, by start): from inst's end back, the span lying inside inst on
-/// any thread that ends last at or before the current time, then on from
-/// that span's start. The elements in time order, gaps between them.
 fn chain(spans: &[Span], kids: &[usize], inst: &Span) -> Vec<Element> {
     let lo = kids.partition_point(|&k| spans[k].start < inst.start);
     let hi = kids.partition_point(|&k| spans[k].start <= inst.end);
@@ -188,20 +182,20 @@ pub fn critical(spans: &[Span], node: Option<&str>, depth: usize) -> Result<Vec<
     let within = |el: &Span| chain(spans, kids.get(&Some(el.node)).map_or(&[][..], |v| v), el);
     let mut out = Vec::new();
     for p in chosen {
-        // The first of the longest, by (duration, -start).
-        let key = |s: &Span| (s.end - s.start, -s.start);
-        let longest =
-            spans
-                .iter()
-                .filter(|s| path(s) == p)
-                .reduce(|i, s| if key(s) > key(i) { s } else { i });
+        let longest_then_earliest = |s: &Span| (s.end - s.start, -s.start);
+        let longest = spans.iter().filter(|s| path(s) == p).reduce(|i, s| {
+            if longest_then_earliest(s) > longest_then_earliest(i) {
+                s
+            } else {
+                i
+            }
+        });
         let Some(inst) = longest else { continue };
         let (mut rows, mut totals) = (Vec::new(), Map::<Names, i64>::default());
-        let mut stack = vec![(inst, Rc::new(within(inst)), 0usize, 1usize)];
-        // Depth first: each element's own chain right after its row.
-        while let Some((el, elements, i, level)) = stack.pop() {
+        let mut depth_first_stack = vec![(inst, Rc::new(within(inst)), 0usize, 1usize)];
+        while let Some((el, elements, i, level)) = depth_first_stack.pop() {
             let Some(&e) = elements.get(i) else { continue };
-            stack.push((el, Rc::clone(&elements), i + 1, level));
+            depth_first_stack.push((el, Rc::clone(&elements), i + 1, level));
             let dur = el.end - el.start;
             let (s, tid, start, d, inner) = match e {
                 Element::Gap(a, b) => (None, None, a, b - a, Vec::new()),
@@ -226,7 +220,7 @@ pub fn critical(spans: &[Span], node: Option<&str>, depth: usize) -> Result<Vec<
                 share,
             });
             match (s, inner.iter().any(|x| matches!(x, Element::Span(_)))) {
-                (Some(s), true) => stack.push((s, Rc::new(inner), 0, level + 1)),
+                (Some(s), true) => depth_first_stack.push((s, Rc::new(inner), 0, level + 1)),
                 _ => *totals.entry(path(s.unwrap_or(el)), || 0) += d,
             }
         }

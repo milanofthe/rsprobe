@@ -48,7 +48,6 @@ impl Display for Path<'_> {
     }
 }
 
-/// `path  text`, or `text` at the root.
 pub(crate) struct Line<'a, P>(pub(crate) &'a Event, pub(crate) &'a P);
 
 impl<P: Display> Display for Line<'_, P> {
@@ -60,12 +59,8 @@ impl<P: Display> Display for Line<'_, P> {
     }
 }
 
-/// Width of the time column of a line: the widest time below 1000 hours,
-/// `999:59:59`.
-const TIME_WIDTH: usize = 9;
+const TIME_WIDTH: usize = "999:59:59".len();
 
-/// The time since the context was built (see [`units`](crate::units)), the
-/// level and [`Line`].
 struct Stamped<'a, P>(&'a Event, &'a P);
 
 impl<P: Display> Display for Stamped<'_, P> {
@@ -94,12 +89,9 @@ impl Event {
 /// of its level unless `NO_COLOR` is set.
 #[derive(Default)]
 pub struct Stderr {
-    /// A progress line without a line feed is on the terminal.
-    open: AtomicBool,
+    progress_line_open: AtomicBool,
 }
 
-/// ANSI style of a terminal line by level: ERROR red, WARN yellow, DEBUG and
-/// TRACE dim.
 fn style(level: Level) -> &'static str {
     match level {
         Level::ERROR => "\x1b[31m",
@@ -113,7 +105,7 @@ impl Sink for Stderr {
     fn event(&self, e: &Event, path: &Path) {
         let mut w = std::io::stderr().lock();
         let terminal = w.is_terminal();
-        let clear = match self.open.swap(false, Relaxed) {
+        let clear = match self.progress_line_open.swap(false, Relaxed) {
             true => "\r\x1b[2K",
             false => "",
         };
@@ -122,9 +114,9 @@ impl Sink for Stderr {
             false => "",
         };
         let off = if on.is_empty() { "" } else { "\x1b[0m" };
-        let open = terminal && matches!(e.kind, Kind::Progress { .. });
-        self.open.store(open, Relaxed);
-        let end = if open { "" } else { "\n" };
+        let progress_line_open = terminal && matches!(e.kind, Kind::Progress { .. });
+        self.progress_line_open.store(progress_line_open, Relaxed);
+        let end = if progress_line_open { "" } else { "\n" };
         let _ = write!(w, "{clear}{on}{}{off}{end}", e.line(path));
     }
 }
@@ -132,7 +124,9 @@ impl Sink for Stderr {
 /// Keeps events with their rendered path until [`drain`](Buffer::drain).
 /// Clones share one buffer: a host that must not be called from worker
 /// threads (a Python interpreter, a wasm host) attaches a clone to the
-/// context and drains the buffer on its own thread.
+/// context and drains the buffer on its own thread. A buffer takes every
+/// event, each repeat of a warning included, because what a host does with a
+/// repeated one is its own rule.
 #[derive(Clone, Default)]
 pub struct Buffer(Arc<Mutex<Vec<(Event, String)>>>);
 
@@ -153,7 +147,6 @@ impl Sink for Buffer {
         lock(&self.0).push((e.clone(), path));
     }
 
-    /// Every event: what a host does with a repeated one is its own rule.
     fn every(&self) -> bool {
         true
     }

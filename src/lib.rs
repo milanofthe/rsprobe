@@ -115,29 +115,16 @@ pub use record::{Calibration, Node, Param, Record, ThreadNodes};
 pub use sinks::{Buffer, Path, Sink, Stderr};
 pub use site::{Level, Site};
 
-/// Version of the record's JSON layout: 2 adds the measure kind `max`, 3
-/// splits the time and the calls of a node by the kind of thread.
 const SCHEMA: u32 = 3;
 
 /// The environment variable that names the file a program writes its record
 /// to ([`Record::save`]).
 pub const RECORD_ENV: &str = "RSPROBE_RECORD";
 
-/// Calibration: empty scopes timed after a pass of the same count that warms
-/// the caches. A scope costs 45 ns with the default clock (examples/bench.rs
-/// on a Ryzen 9 9900X under Linux and on an Apple M3), so a pass takes about
-/// 0.2 ms. The constants are means over the pass: on Apple Silicon the clock
-/// ticks every 42 ns, about the cost of a scope, and a minimum over short
-/// rounds was measured to return an inner constant of 0.
 const CALIBRATION_SCOPES: u32 = 4096;
 
-/// Distinct events at WARN and above a context keeps for its record; further
-/// ones are counted as dropped.
-const WARNINGS: usize = 100;
+const WARNINGS_KEPT: usize = 100;
 
-/// Default least time between two progress events of a call site, in ns. A
-/// rule, not a measurement: a line a second reads as progress on a terminal
-/// and adds 3600 lines an hour to a log file.
 const PROGRESS_NS: u64 = 1_000_000_000;
 
 /// The static call site of one macro expansion, as `&'static Site`.

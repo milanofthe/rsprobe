@@ -65,29 +65,30 @@ pub fn share(x: f64) -> Share {
     Share(x)
 }
 
-/// Units of a time below a minute, in ns.
-const TIME: [(f64, &str); 4] = [(1.0, "ns"), (1e3, "us"), (1e6, "ms"), (1e9, "s")];
+const TIME_UNITS_NS: [(f64, &str); 4] = [(1.0, "ns"), (1e3, "us"), (1e6, "ms"), (1e9, "s")];
+const COUNT_UNITS_FROM_MILLION: [&str; 5] = ["M", "G", "T", "P", "E"];
+const BYTE_UNITS_FROM_THOUSAND: [&str; 6] = ["kB", "MB", "GB", "TB", "PB", "EB"];
+const NEXT_UNIT_AT: f64 = 1000.0;
+const MINUTE_S: f64 = 60.0;
+const HOUR_S: u64 = 3600;
+const UNGROUPED_FROM: f64 = 1e21;
 
-/// Units of a count from one million.
-const COUNT: [&str; 5] = ["M", "G", "T", "P", "E"];
-
-/// Units of a size from 1000 bytes.
-const BYTES: [&str; 6] = ["kB", "MB", "GB", "TB", "PB", "EB"];
-
-/// A scaled number reaches the next unit at this value: three digits.
-const NEXT: f64 = 1000.0;
-
-/// Seconds a minute and an hour.
-const MINUTE: f64 = 60.0;
-const HOUR: u64 = 3600;
-
-/// A text on the stack, so that a value is padded without allocating.
-struct Buf {
+struct StackText {
     b: [u8; 48],
     n: usize,
 }
 
-impl Write for Buf {
+impl StackText {
+    fn new() -> StackText {
+        StackText { b: [0; 48], n: 0 }
+    }
+
+    fn as_str(&self) -> Result<&str, fmt::Error> {
+        std::str::from_utf8(&self.b[..self.n]).map_err(|_| fmt::Error)
+    }
+}
+
+impl Write for StackText {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         let end = self.n + s.len();
         let to = self.b.get_mut(self.n..end).ok_or(fmt::Error)?;
@@ -97,37 +98,28 @@ impl Write for Buf {
     }
 }
 
-/// Writes through `write` and pads the text to the formatter's width; a text
-/// longer than the buffer (a count beyond 10^40) is written unpadded.
 fn padded(f: &mut Formatter, write: impl Fn(&mut dyn Write) -> fmt::Result) -> fmt::Result {
-    let mut b = Buf { b: [0; 48], n: 0 };
+    let mut b = StackText::new();
     match write(&mut b) {
-        // Only `str`s were written into it.
-        Ok(()) => f.pad(std::str::from_utf8(&b.b[..b.n]).map_err(|_| fmt::Error)?),
+        Ok(()) => f.pad(b.as_str()?),
         Err(_) => write(f),
     }
 }
 
-/// `x >= 0` rounded to three significant digits.
-fn round3(x: f64) -> f64 {
-    round(x, 3)
+fn round_3_significant(x: f64) -> f64 {
+    round_significant(x, 3)
 }
 
-/// `x >= 0` rounded to `digits` significant digits.
-fn round(x: f64, digits: usize) -> f64 {
-    let mut b = Buf { b: [0; 48], n: 0 };
+fn round_significant(x: f64, digits: usize) -> f64 {
+    let mut b = StackText::new();
     match write!(b, "{x:.*e}", digits - 1) {
-        Ok(()) => std::str::from_utf8(&b.b[..b.n])
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(x),
+        Ok(()) => b.as_str().ok().and_then(|s| s.parse().ok()).unwrap_or(x),
         Err(_) => x,
     }
 }
 
-/// `x >= 0` with three digits; from 1000 rounded to an integer, grouped.
-fn digits(w: &mut dyn Write, x: f64) -> fmt::Result {
-    let r = round3(x);
+fn three_digits(w: &mut dyn Write, x: f64) -> fmt::Result {
+    let r = round_3_significant(x);
     if r < 1.0 {
         write!(w, "{x:.2}")
     } else if r < 10.0 {
@@ -139,10 +131,8 @@ fn digits(w: &mut dyn Write, x: f64) -> fmt::Result {
     }
 }
 
-/// An integral `x >= 0` with a comma between groups of three digits.
 fn grouped(w: &mut dyn Write, x: f64) -> fmt::Result {
-    if x >= 1e21 {
-        // Beyond u64 and the groups a reader counts.
+    if x >= UNGROUPED_FROM {
         return write!(w, "{x:.0}");
     }
     let n = x as u128;
@@ -158,27 +148,28 @@ fn grouped(w: &mut dyn Write, x: f64) -> fmt::Result {
     Ok(())
 }
 
-/// `x >= 0` in the first of `units` (each 1000 of the one before, the first
-/// `first` of the plain number) in which it stays below 1000, or plain
-/// with `plain` below `first`.
-fn scaled(w: &mut dyn Write, x: f64, first: f64, units: &[&str], plain: &str) -> fmt::Result {
-    if x.round() < first {
+fn scaled(
+    w: &mut dyn Write,
+    x: f64,
+    first_unit_at: f64,
+    units: &[&str],
+    plain_suffix: &str,
+) -> fmt::Result {
+    if x.round() < first_unit_at {
         match x.fract() == 0.0 {
             true => grouped(w, x)?,
-            false => digits(w, x)?,
+            false => three_digits(w, x)?,
         }
-        return w.write_str(plain);
+        return w.write_str(plain_suffix);
     }
-    let (mut v, mut k) = (x / first, 0);
-    while round3(v) >= NEXT && k + 1 < units.len() {
-        (v, k) = (v / NEXT, k + 1);
+    let (mut v, mut k) = (x / first_unit_at, 0);
+    while round_3_significant(v) >= NEXT_UNIT_AT && k + 1 < units.len() {
+        (v, k) = (v / NEXT_UNIT_AT, k + 1);
     }
-    digits(w, v)?;
+    three_digits(w, v)?;
     write!(w, " {}", units[k])
 }
 
-/// Writes the sign of `x` and `body` of its magnitude; a value that is not
-/// finite as Rust writes it.
 fn signed(
     f: &mut Formatter,
     x: f64,
@@ -202,34 +193,40 @@ impl Display for Time {
                 return w.write_str("0 ns");
             }
             let mut k = 0;
-            while k + 1 < TIME.len() && round3(ns / TIME[k].0) >= NEXT {
+            while k + 1 < TIME_UNITS_NS.len()
+                && round_3_significant(ns / TIME_UNITS_NS[k].0) >= NEXT_UNIT_AT
+            {
                 k += 1;
             }
-            let s = ns / TIME[k].0;
-            if k + 1 < TIME.len() || round3(s) < MINUTE {
-                digits(w, s)?;
-                return write!(w, " {}", TIME[k].1);
+            let s = ns / TIME_UNITS_NS[k].0;
+            if k + 1 < TIME_UNITS_NS.len() || round_3_significant(s) < MINUTE_S {
+                three_digits(w, s)?;
+                return write!(w, " {}", TIME_UNITS_NS[k].1);
             }
             let tenths = (s * 10.0).round() as u64;
-            if tenths < 10 * HOUR {
+            if tenths < 10 * HOUR_S {
                 let (m, t) = (tenths / 600, tenths % 600);
                 return write!(w, "{m}:{:02}.{}", t / 10, t % 10);
             }
             let s = s.round() as u64;
-            write!(w, "{}:{:02}:{:02}", s / HOUR, s % HOUR / 60, s % 60)
+            write!(w, "{}:{:02}:{:02}", s / HOUR_S, s % HOUR_S / 60, s % 60)
         })
     }
 }
 
 impl Display for Count {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        signed(f, self.0, |w, n| scaled(w, n, 1e6, &COUNT, ""))
+        signed(f, self.0, |w, n| {
+            scaled(w, n, 1e6, &COUNT_UNITS_FROM_MILLION, "")
+        })
     }
 }
 
 impl Display for Bytes {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        signed(f, self.0, |w, n| scaled(w, n, NEXT, &BYTES, " B"))
+        signed(f, self.0, |w, n| {
+            scaled(w, n, NEXT_UNIT_AT, &BYTE_UNITS_FROM_THOUSAND, " B")
+        })
     }
 }
 
@@ -240,16 +237,14 @@ impl Display for Share {
             if p == 0.0 {
                 return w.write_str("0 %");
             }
-            let r = round(p, 2);
+            let r = round_significant(p, 2);
             if r >= 1.0 {
                 return write!(w, "{p:.1} %");
             }
-            // Two significant digits below 1, then the zeros after them dropped.
-            let d = (1 - r.log10().floor() as i32).max(1) as usize;
-            let mut b = Buf { b: [0; 48], n: 0 };
-            write!(b, "{r:.d$}")?;
-            let s = std::str::from_utf8(&b.b[..b.n]).map_err(|_| fmt::Error)?;
-            write!(w, "{} %", s.trim_end_matches('0'))
+            let decimals_of_two_significant = (1 - r.log10().floor() as i32).max(1) as usize;
+            let mut b = StackText::new();
+            write!(b, "{r:.decimals_of_two_significant$}")?;
+            write!(w, "{} %", b.as_str()?.trim_end_matches('0'))
         })
     }
 }

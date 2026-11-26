@@ -36,9 +36,6 @@ pub fn points(runs: &[Run], by: &str) -> Result<Vec<(f64, Nodes)>> {
         .collect())
 }
 
-/// (measure, c, p, q, residual) of the fit of c n^p log^q(n) to each of the
-/// measures over a node's values vs at n; a measure zero or absent at any
-/// point is not fitted.
 fn node_fits(
     n: &[f64],
     vs: &[&Values],

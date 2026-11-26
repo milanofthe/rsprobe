@@ -1,12 +1,11 @@
 //! critical on a trace built by hand with a known critical path.
 
+mod common;
+
+use common::{close, constants::ROUND_OFF};
 use rsprobe_tool::critical::{self, critical, Span};
 use rsprobe_tool::fmt::name;
 
-/// A phase on thread 0 over 0..100 us whose tasks run on two workers:
-/// thread 1 runs the long chain 5..40 and 42..90 (with a kernel 50..80
-/// inside the second), thread 2 the short one 6..30 and 31..60. A second
-/// top-level scope follows the phase. Name, node, parent, [tid, ts, dur (us)].
 const SPANS: [(&str, u32, Option<u32>, [u32; 3]); 8] = [
     ("root", 0, None, [0, 0, 120]),
     ("phase", 1, Some(0), [0, 0, 100]),
@@ -33,8 +32,6 @@ fn spans() -> Vec<Span> {
     .unwrap()
 }
 
-/// (last name or none for a gap, thread, start and duration in us) per row
-/// of a level.
 fn rows(c: &critical::Critical, level: usize) -> Vec<(Option<&str>, Option<u64>, i64, i64)> {
     let rows = c.rows.iter().filter(|r| r.level == level);
     rows.map(|r| {
@@ -63,7 +60,7 @@ fn chain_follows_the_long_worker() {
         (None, None, 90, 10),
     ];
     assert_eq!(rows(c, 1), expected);
-    assert!((c.rows[3].share - 0.48).abs() < 1e-12);
+    assert!(close(c.rows[3].share, 0.48, ROUND_OFF));
     assert_eq!(
         totals(c),
         [
