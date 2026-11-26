@@ -58,7 +58,7 @@ fn threads_and_handles_sum_under_their_node() {
                 });
             }
         });
-        let _task_inline_on_the_entering_thread = h.enter();
+        let _inline_task = h.enter();
         leaf();
     }
     let r = ctx.record();
@@ -207,7 +207,7 @@ fn a_handle_entered_where_its_context_is_current_only_moves_the_node() {
         let _a = scope!("a");
         let h = current();
         let _b = scope!("b");
-        let _task_of_a_run_by_the_issuing_thread_under_b = h.enter();
+        let _issued_task = h.enter();
         let _t = scope!("task");
     }
     drop(on);

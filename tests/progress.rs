@@ -106,7 +106,7 @@ fn threads_of_one_run_read_the_clock_in_the_order_they_pace() {
     static READ: AtomicBool = AtomicBool::new(false);
     static OTHER_DONE: AtomicBool = AtomicBool::new(false);
     thread_local!(static HOLD: Cell<bool> = const { Cell::new(false) });
-    fn clock_held_until_the_other_thread_reported() -> u64 {
+    fn held_clock() -> u64 {
         let t = CLOCK.load(SeqCst);
         if HOLD.with(|h| h.replace(false)) {
             READ.store(true, SeqCst);
@@ -122,7 +122,7 @@ fn threads_of_one_run_read_the_clock_in_the_order_they_pace() {
     }
     let buffer = Buffer::default();
     let ctx = Context::builder()
-        .clock(clock_held_until_the_other_thread_reported)
+        .clock(held_clock)
         .progress_interval(0)
         .sink(buffer.clone())
         .build();

@@ -51,7 +51,7 @@ pub fn corrected(run: &Run) -> Corrected {
     let kids = children(nodes);
     let v = |i: usize, m: &str| nodes.vals[i].get(m);
     let ctx = |i: usize| v(i, "calls") - v(i, "worker_calls");
-    fn sum_over_descendants_down_to_stop(
+    fn sum_down_to(
         kids: &[Vec<usize>],
         i: usize,
         f: &dyn Fn(usize) -> f64,
@@ -61,7 +61,7 @@ pub fn corrected(run: &Run) -> Corrected {
             if stop(k) {
                 0.0
             } else {
-                sum_over_descendants_down_to_stop(kids, k, f, stop)
+                sum_down_to(kids, k, f, stop)
             }
         };
         sum(kids[i].iter().map(|&k| f(k) + deeper(k)))
@@ -70,8 +70,8 @@ pub fn corrected(run: &Run) -> Corrected {
     let fix = |x: f64, d: f64| if x == 0.0 { 0.0 } else { x - d };
     let mut out = nodes.clone();
     for (i, o) in out.vals.iter_mut().enumerate() {
-        let c = sum_over_descendants_down_to_stop(&kids, i, &ctx, &|_| false);
-        let w = sum_over_descendants_down_to_stop(&kids, i, &|k| v(k, "worker_calls"), &tasks);
+        let c = sum_down_to(&kids, i, &ctx, &|_| false);
+        let w = sum_down_to(&kids, i, &|k| v(k, "worker_calls"), &tasks);
         let (bw, bp) = if tasks(i) { (0.0, w) } else { (w, 0.0) };
         let wall = fix(v(i, "wall"), ctx(i) * inner + c * full);
         let busy = fix(v(i, "busy"), v(i, "worker_calls") * inner + bw * full);

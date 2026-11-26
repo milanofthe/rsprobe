@@ -18,9 +18,7 @@ impl Drop for Freed {
     }
 }
 
-fn freed_before_and_after_worker_runs(
-    then: impl FnOnce(Handle, Handle) + Send + 'static,
-) -> (bool, bool) {
+fn freed_around_the_worker(then: impl FnOnce(Handle, Handle) + Send + 'static) -> (bool, bool) {
     let freed = Arc::new(AtomicBool::new(false));
     let ctx = Context::builder().sink(Freed(freed.clone())).build();
     let other = Context::new();
@@ -60,13 +58,13 @@ fn freed_before_and_after_worker_runs(
 
 #[test]
 fn a_worker_lets_go_when_it_enters_another_context() {
-    let (before, after) = freed_before_and_after_worker_runs(|_, o| drop(o.enter()));
+    let (before, after) = freed_around_the_worker(|_, o| drop(o.enter()));
     assert!(!before && after);
 }
 
 #[test]
 fn a_worker_lets_go_when_it_enters_a_dropped_context() {
-    let (before, after) = freed_before_and_after_worker_runs(|h, _| {
+    let (before, after) = freed_around_the_worker(|h, _| {
         let _g = h.enter();
         assert!(!active!());
     });
