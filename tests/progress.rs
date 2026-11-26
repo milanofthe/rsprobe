@@ -146,3 +146,27 @@ fn threads_of_one_run_read_the_clock_in_the_order_they_pace() {
     seen.sort();
     assert_eq!(seen, ["1/10", "2/10"]);
 }
+
+#[test]
+fn progress_stays_usable_after_the_clock_panicked_under_the_site_lock() {
+    thread_local!(static PANICS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    fn clock_that_panics_when_told() -> u64 {
+        assert!(!PANICS.get(), "the clock was told to panic");
+        0
+    }
+    let buffer = Buffer::default();
+    let ctx = Context::builder()
+        .clock(clock_that_panics_when_told)
+        .progress_interval(0)
+        .sink(buffer.clone())
+        .build();
+    let _on = ctx.enter();
+    PANICS.set(true);
+    let panicked = std::panic::catch_unwind(|| progress!(1, 2)).is_err();
+    PANICS.set(false);
+    assert!(panicked);
+    progress!(2, 2);
+    let mut seen = Vec::new();
+    buffer.drain(|e, _| seen.push(e.kind.to_string()));
+    assert_eq!(seen, ["2/2"]);
+}
