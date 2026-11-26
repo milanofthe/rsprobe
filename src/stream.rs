@@ -6,10 +6,11 @@ use crate::Event;
 use std::fmt::{self, Display, Formatter};
 
 pub(crate) enum Item {
-    /// A guard's span at a node.
-    Span { node: u32, start: u64, dur: u64 },
-    /// The thread's value of an `add!` site at a node after an add; a
-    /// counter series per node and thread.
+    Span {
+        node: u32,
+        start: u64,
+        dur: u64,
+    },
     Count {
         site: u32,
         node: u32,
