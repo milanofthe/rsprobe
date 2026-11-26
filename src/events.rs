@@ -190,9 +190,7 @@ impl Site {
     /// what [`error!`](crate::error) expands to.
     #[inline]
     pub fn event(&'static self, kind: impl FnOnce() -> Kind) {
-        let here = self
-            .active(|cur, e, _| Some((e.shared()?.clone(), cur.node, e.thread)))
-            .flatten();
+        let here = self.active(|cur, e, _| (e.shared().clone(), cur.node, e.thread));
         if let Some(here) = here {
             emit(here, (self.level, self.module, self.file, self.line), kind)
         }
@@ -207,9 +205,7 @@ impl Site {
         units: impl FnOnce() -> (u64, u64),
         text: impl FnOnce() -> String,
     ) {
-        let here = self
-            .active(|cur, e, _| Some((e.shared()?.clone(), cur.node, e.thread)))
-            .flatten();
+        let here = self.active(|cur, e, _| (e.shared().clone(), cur.node, e.thread));
         if let Some(here) = here {
             let (done, total) = units();
             let run_thread = if total > 0 { NONE } else { here.2 };

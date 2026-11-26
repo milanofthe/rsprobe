@@ -76,29 +76,28 @@ pub(crate) fn raise(c: &AtomicU64, v: u64) {
 }
 
 impl Entry {
-    pub(crate) fn shared(&self) -> Option<&Arc<Shared>> {
-        self.live.as_ref()
+    pub(crate) fn shared(&self) -> &Arc<Shared> {
+        self.live.as_ref().expect("entry is current")
     }
 
-    fn cell<T: Default>(&self, keep: impl FnOnce(&mut Tree, Box<T>)) -> Option<*const T> {
-        let shared = self.shared()?;
+    fn cell<T: Default>(&self, keep: impl FnOnce(&mut Tree, Box<T>)) -> *const T {
         let b = Box::<T>::default();
         let p: *const T = &*b;
-        keep(&mut lock(&shared.tree), b);
-        Some(p)
+        keep(&mut lock(&self.shared().tree), b);
+        p
     }
 
     #[inline]
-    pub(crate) fn base(&mut self, node: u32) -> Option<&Base> {
+    pub(crate) fn base(&mut self, node: u32) -> &Base {
         match self.nodes.get(node as usize) {
             // SAFETY: the context's tree never drops a cell, and a guard on this thread holds the tree.
-            Some(l) if !l.base.is_null() => Some(unsafe { &*l.base }),
+            Some(l) if !l.base.is_null() => unsafe { &*l.base },
             _ => self.new_base(node),
         }
     }
 
     #[cold]
-    fn new_base(&mut self, node: u32) -> Option<&Base> {
+    fn new_base(&mut self, node: u32) -> &Base {
         let n = node as usize;
         if self.nodes.len() <= n {
             self.nodes.resize_with(n + 1, || Local {
@@ -108,42 +107,42 @@ impl Entry {
             });
         }
         if self.nodes[n].base.is_null() {
-            self.nodes[n].base = self.cell(|t, b| t.bases.push((self.thread, node, b)))?;
+            self.nodes[n].base = self.cell(|t, b| t.bases.push((self.thread, node, b)));
         }
         // SAFETY: the context's tree never drops a cell, and a guard on this thread holds the tree.
-        Some(unsafe { &*self.nodes[n].base })
+        unsafe { &*self.nodes[n].base }
     }
 
-    pub(crate) fn child(&mut self, node: u32, site: u32) -> Option<u32> {
+    pub(crate) fn child(&mut self, node: u32, site: u32) -> u32 {
         let local = &self.nodes[node as usize];
         match local.children.iter().find(|c| c.0 == site) {
-            Some(&(_, c)) => Some(c),
+            Some(&(_, c)) => c,
             None => uncounted(|| self.intern(node, site)),
         }
     }
 
     #[cold]
-    fn intern(&mut self, node: u32, site: u32) -> Option<u32> {
-        let c = lock(&self.shared()?.tree).intern(node, site);
+    fn intern(&mut self, node: u32, site: u32) -> u32 {
+        let c = lock(&self.shared().tree).intern(node, site);
         self.nodes[node as usize].children.push((site, c));
         self.base(c);
-        Some(c)
+        c
     }
 
-    fn extra(&mut self, node: u32, site: u32) -> Option<*const AtomicU64> {
+    fn extra(&mut self, node: u32, site: u32) -> *const AtomicU64 {
         let local = &self.nodes[node as usize];
         match local.extras.iter().find(|e| e.0 == site) {
-            Some(&(_, p)) => Some(p),
+            Some(&(_, p)) => p,
             None => uncounted(|| self.new_extra(node, site)),
         }
     }
 
     #[cold]
     #[inline(never)]
-    fn new_extra(&mut self, node: u32, site: u32) -> Option<*const AtomicU64> {
-        let p = self.cell(|t, b| t.extras.push((self.thread, node, site, b)))?;
+    fn new_extra(&mut self, node: u32, site: u32) -> *const AtomicU64 {
+        let p = self.cell(|t, b| t.extras.push((self.thread, node, site, b)));
         self.nodes[node as usize].extras.push((site, p));
-        Some(p)
+        p
     }
 
     #[inline]
@@ -169,9 +168,7 @@ impl Entry {
     #[cold]
     #[inline(never)]
     fn decide(&mut self, site: &Site, id: usize) -> bool {
-        let on = self
-            .shared()
-            .is_some_and(|s| site.level <= s.level(site.module));
+        let on = site.level <= self.shared().level(site.module);
         if self.activity.len() <= id {
             uncounted(|| self.activity.resize(id + 1, Activity::Undecided));
         }
@@ -263,9 +260,7 @@ impl Site {
 
     #[inline(always)]
     fn put(&'static self, value: impl FnOnce() -> u64, op: fn(&AtomicU64, u64)) {
-        let cell = self
-            .active(|cur, e, id| Some((e.stream, cur.node, id, e.extra(cur.node, id)?)))
-            .flatten();
+        let cell = self.active(|cur, e, id| (e.stream, cur.node, id, e.extra(cur.node, id)));
         if let Some((stream, node, site, c)) = cell {
             let v = value();
             // SAFETY: the context's tree never drops a cell, and a guard on this thread holds the tree.

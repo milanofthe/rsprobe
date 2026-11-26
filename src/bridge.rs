@@ -28,7 +28,7 @@ impl log::Log for Logger {
             return;
         }
         let (level, module) = (Level(r.level() as u8), r.module_path_static().unwrap_or(""));
-        let here = with_current(|cur, e| Some((e.shared()?.clone(), cur.node, e.thread))).flatten();
+        let here = with_current(|cur, e| (e.shared().clone(), cur.node, e.thread));
         let Some(here) = here.filter(|h| level <= h.0.level(module)) else {
             return;
         };

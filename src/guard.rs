@@ -33,12 +33,8 @@ pub struct Guard {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
-    /// A scope: one call and its span.
     Scope,
-    /// A context or a handle entered on a thread: its span.
     Enter,
-    /// A handle entered where its context is current already: nothing, the
-    /// span lies inside one this thread is timing.
     Switch,
 }
 
@@ -109,10 +105,7 @@ impl Site {
                 return Guard::IDLE;
             };
             let prev = *cur;
-            let Some(node) = e.child(prev.node, id) else {
-                return Guard::IDLE;
-            };
-            cur.node = node;
+            cur.node = e.child(prev.node, id);
             Guard {
                 prev_ctx: e.id,
                 cur: *cur,
@@ -152,19 +145,18 @@ impl Drop for Guard {
             let span_ns = (e.clock)().saturating_sub(self.start);
             let emitting_ns = e.emitting_ns - self.emitting_ns_at_start;
             let span_without_emitting_ns = span_ns.saturating_sub(emitting_ns);
-            if let Some(b) = e.base(self.cur.node) {
-                let scope = self.kind == Kind::Scope;
-                let (count, time) = match (scope, self.cur.via_handle) {
-                    (_, false) => (CALLS, WALL),
-                    (true, true) => (WORKER_CALLS, BUSY),
-                    (false, true) => (TASKS, POOL),
-                };
-                bump(&b[count], (scope || self.cur.via_handle) as u64);
-                bump(&b[time], span_without_emitting_ns);
-                for (k, &m) in mem.iter().enumerate() {
-                    let op = if BYTES + k == PEAK { raise } else { bump };
-                    op(&b[BYTES + k], m);
-                }
+            let b = e.base(self.cur.node);
+            let scope = self.kind == Kind::Scope;
+            let (count, time) = match (scope, self.cur.via_handle) {
+                (_, false) => (CALLS, WALL),
+                (true, true) => (WORKER_CALLS, BUSY),
+                (false, true) => (TASKS, POOL),
+            };
+            bump(&b[count], (scope || self.cur.via_handle) as u64);
+            bump(&b[time], span_without_emitting_ns);
+            for (k, &m) in mem.iter().enumerate() {
+                let op = if BYTES + k == PEAK { raise } else { bump };
+                op(&b[BYTES + k], m);
             }
             if e.stream {
                 span(e, self.cur.node, self.start, span_ns);
@@ -177,8 +169,7 @@ impl Drop for Guard {
             if e.depth == 0 {
                 e.flush();
             }
-            let keeps_handle_context =
-                self.cur.via_handle && e.shared().is_some_and(|s| !s.closed.load(Relaxed));
+            let keeps_handle_context = self.cur.via_handle && !e.shared().closed.load(Relaxed);
             let released = e.live.take_if(|_| e.depth == 0 && !keeps_handle_context);
             let p = entries.get(self.prev.entry as usize);
             let prev_still_entered = p.is_some_and(|p| p.id == self.prev_ctx && p.depth > 0);
