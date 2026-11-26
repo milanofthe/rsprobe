@@ -2,6 +2,9 @@
 //! library and the binary: the check that the tool reads what the crate
 //! writes.
 
+mod common;
+
+use common::{close, constants::ROUND_OFF};
 use rsprobe_tool::compare::compare;
 use rsprobe_tool::constants::GATE;
 use rsprobe_tool::fmt::path;
@@ -11,8 +14,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-/// The workload example, built once with the feature `on`; its path as
-/// cargo reports the artifact.
 fn workload() -> &'static Path {
     static BIN: OnceLock<PathBuf> = OnceLock::new();
     BIN.get_or_init(|| {
@@ -35,8 +36,6 @@ fn workload() -> &'static Path {
     })
 }
 
-/// A directory of `k` records of the workload at size n and t threads,
-/// written once per run of the tests.
 fn set(n: u32, t: u32, k: u32) -> String {
     static DONE: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("roundtrip-{n}-{t}-{k}"));
@@ -57,7 +56,6 @@ fn set(n: u32, t: u32, k: u32) -> String {
     dir.to_str().unwrap().into()
 }
 
-/// The binary on the arguments: exit code and stdout.
 fn tool(args: &[&str]) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_rsprobe"))
         .args(args)
@@ -93,8 +91,11 @@ fn report_of_the_workload() {
         [("nonzeros", 3000.0)]
     );
     let (pairs, task) = (&at("pairs").v, &at("pairs/task").v);
-    // summed over 3 records of 2 tasks each, all on workers
-    assert_eq!((pairs.get("busy"), pairs.get("tasks")), (0.0, 6.0));
+    assert_eq!(
+        (pairs.get("busy"), pairs.get("tasks")),
+        (0.0, 6.0),
+        "summed over 3 records of 2 tasks each, all on workers"
+    );
     assert_eq!((task.get("wall"), task.get("worker_calls")), (0.0, 6.0));
     assert!(at("pairs")
         .ratios
@@ -126,12 +127,12 @@ fn compare_of_two_sizes() {
     ];
     assert_eq!(exact, expected);
     assert!(c.nondeterministic.is_empty() && c.structure.is_empty());
-    // the caller's wait, a time the program adds: compared with an interval,
-    // never as an exact difference
-    assert!(c
-        .noisy
-        .iter()
-        .any(|n| path(&n.path) == "pairs" && n.measure == "join"));
+    assert!(
+        c.noisy
+            .iter()
+            .any(|n| path(&n.path) == "pairs" && n.measure == "join"),
+        "the wait of the caller is a time the program adds and is compared with an interval"
+    );
     let (code, out) = tool(&["compare", &a, &b]);
     assert!(code == 0 || code == 1);
     assert!(out.contains("nonzeros     1,000 -> 1,500"));
@@ -149,8 +150,8 @@ fn scale_over_size_and_threads() {
             .unwrap()
             .3
     };
-    assert!((exponent("pairs/task", "differences") - 2.0).abs() < 1e-9);
-    assert!((exponent("assemble", "nonzeros") - 1.0).abs() < 1e-9);
+    assert!(close(exponent("pairs/task", "differences"), 2.0, ROUND_OFF));
+    assert!(close(exponent("assemble", "nonzeros"), 1.0, ROUND_OFF));
     let mut args = vec!["scale", "--by", "n"];
     args.extend(sizes.iter().map(String::as_str));
     let (code, out) = tool(&args);
@@ -179,15 +180,17 @@ fn critical_path_of_the_pairs() {
         .iter()
         .filter(|r| r.path.as_ref().is_some_and(|p| p.join("/") == "pairs/task"))
         .collect();
-    // the chain's tasks follow one another, on workers: the one ending last
-    // where the tasks ran concurrently, more where a task started late
     assert!(
         !tasks.is_empty()
             && tasks
                 .windows(2)
-                .all(|w| w[0].start + w[0].dur <= w[1].start)
+                .all(|w| w[0].start + w[0].dur <= w[1].start),
+        "the tasks of the chain follow one another"
     );
-    assert!(tasks.iter().all(|t| t.tid != Some(0)));
+    assert!(
+        tasks.iter().all(|t| t.tid != Some(0)),
+        "the tasks of the chain ran on workers"
+    );
     let elapsed = c.instance.end - c.instance.start;
     assert_eq!(
         c.rows

@@ -83,7 +83,6 @@ impl Parser<'_> {
         }
     }
 
-    /// Skips blanks, then `s` if it follows.
     fn eat(&mut self, s: &str) -> bool {
         self.ws();
         let hit = self.b[self.i..].starts_with(s.as_bytes());
@@ -91,7 +90,6 @@ impl Parser<'_> {
         hit
     }
 
-    /// Elements up to `close`, each read by `item`.
     fn list<T>(
         &mut self,
         close: &str,
@@ -188,8 +186,6 @@ impl Parser<'_> {
         }
     }
 
-    /// The four hex digits of `\u` at the cursor, a surrogate pair with the
-    /// `\u` escape that follows as one character.
     fn unicode(&mut self) -> Result<char> {
         let hex = |p: &mut Self| {
             let u =

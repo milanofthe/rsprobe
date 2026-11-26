@@ -51,8 +51,7 @@ pub fn corrected(run: &Run) -> Corrected {
     let kids = children(nodes);
     let v = |i: usize, m: &str| nodes.vals[i].get(m);
     let ctx = |i: usize| v(i, "calls") - v(i, "worker_calls");
-    // Sum of f over the descendants of i, not below a node where stop holds.
-    fn below(
+    fn sum_over_descendants_down_to_stop(
         kids: &[Vec<usize>],
         i: usize,
         f: &dyn Fn(usize) -> f64,
@@ -62,7 +61,7 @@ pub fn corrected(run: &Run) -> Corrected {
             if stop(k) {
                 0.0
             } else {
-                below(kids, k, f, stop)
+                sum_over_descendants_down_to_stop(kids, k, f, stop)
             }
         };
         sum(kids[i].iter().map(|&k| f(k) + deeper(k)))
@@ -71,8 +70,8 @@ pub fn corrected(run: &Run) -> Corrected {
     let fix = |x: f64, d: f64| if x == 0.0 { 0.0 } else { x - d };
     let mut out = nodes.clone();
     for (i, o) in out.vals.iter_mut().enumerate() {
-        let c = below(&kids, i, &ctx, &|_| false);
-        let w = below(&kids, i, &|k| v(k, "worker_calls"), &tasks);
+        let c = sum_over_descendants_down_to_stop(&kids, i, &ctx, &|_| false);
+        let w = sum_over_descendants_down_to_stop(&kids, i, &|k| v(k, "worker_calls"), &tasks);
         let (bw, bp) = if tasks(i) { (0.0, w) } else { (w, 0.0) };
         let wall = fix(v(i, "wall"), ctx(i) * inner + c * full);
         let busy = fix(v(i, "busy"), v(i, "worker_calls") * inner + bw * full);
@@ -82,8 +81,7 @@ pub fn corrected(run: &Run) -> Corrected {
         o.set("time", wall + busy);
         o.set("cost", v(i, "wall") + v(i, "busy") - wall - busy);
     }
-    // Self time per kind of thread, where the node has time of that kind.
-    let own: Vec<f64> = (0..out.vals.len())
+    let self_time: Vec<f64> = (0..out.vals.len())
         .map(|i| {
             let o = |x: &str, inside: bool| match v(i, x) == 0.0 || !inside {
                 true => out.vals[i].get(x),
@@ -92,7 +90,7 @@ pub fn corrected(run: &Run) -> Corrected {
             o("wall", true) + o("busy", !tasks(i))
         })
         .collect();
-    for (o, own) in out.vals.iter_mut().zip(own) {
+    for (o, own) in out.vals.iter_mut().zip(self_time) {
         o.set("self", own);
     }
     let totals = |t: &Nodes| {

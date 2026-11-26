@@ -42,8 +42,7 @@ fn work() {
     }
 }
 
-/// Allocations of the first and the second of two passes of `pass`.
-fn passes(pass: impl Fn()) -> (u64, u64) {
+fn allocs_of_two_passes(pass: impl Fn()) -> (u64, u64) {
     let a = allocs();
     pass();
     let b = allocs();
@@ -56,10 +55,10 @@ fn measured_path_does_not_allocate() {
     let ctx = Context::new();
     let _on = ctx.enter();
     let _p = scope!("par");
-    assert_eq!(passes(work).1, 0, "entering thread");
+    assert_eq!(allocs_of_two_passes(work).1, 0, "entering thread");
     let h = current();
     assert_eq!(
-        passes(|| {
+        allocs_of_two_passes(|| {
             let _g = h.enter();
             work();
         })
@@ -68,7 +67,7 @@ fn measured_path_does_not_allocate() {
         "handle on the entering thread"
     );
     std::thread::spawn(move || {
-        let (first, second) = passes(|| {
+        let (first, second) = allocs_of_two_passes(|| {
             let _g = h.enter();
             work();
         });

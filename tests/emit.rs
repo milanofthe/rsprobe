@@ -8,10 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
 
 static TIME: AtomicU64 = AtomicU64::new(0);
 
-/// A sink that takes 1000 ns per event.
-struct Slow;
+struct SinkOf1000Ns;
 
-impl Sink for Slow {
+impl Sink for SinkOf1000Ns {
     fn event(&self, _: &Event, _: &Path) {
         TIME.fetch_add(1000, SeqCst);
     }
@@ -21,7 +20,7 @@ impl Sink for Slow {
 fn the_time_of_a_sink_is_emit_and_not_wall() {
     let ctx = Context::builder()
         .clock(|| TIME.load(SeqCst))
-        .sink(Slow)
+        .sink(SinkOf1000Ns)
         .stream()
         .build();
     {
@@ -44,8 +43,9 @@ fn the_time_of_a_sink_is_emit_and_not_wall() {
     assert_eq!(node(&["a", "b"]).get("wall"), 5);
     assert_eq!(node(&["a"]).get("wall"), 25);
     assert_eq!(r.nodes[0].get("wall"), 25);
-    // The trace keeps the spans as the clock gave them.
-    assert!(ctx
-        .trace()
-        .contains("\"name\":\"b\",\"ts\":1.010,\"dur\":2.005"));
+    assert!(
+        ctx.trace()
+            .contains("\"name\":\"b\",\"ts\":1.010,\"dur\":2.005"),
+        "the trace keeps the spans as the clock gave them"
+    );
 }

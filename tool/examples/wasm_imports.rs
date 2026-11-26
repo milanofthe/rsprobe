@@ -6,8 +6,14 @@
 //!
 //!     cargo run -p rsprobe-tool --example wasm_imports -- MODULE.wasm
 
-/// The LEB128 number at `b[*i]`, the cursor moved past it.
-fn leb(b: &[u8], i: &mut usize) -> u64 {
+// https://webassembly.github.io/spec/core/binary/modules.html#import-section
+const IMPORT_SECTION: u8 = 2;
+const IMPORT_FUNCTION: u8 = 0;
+const IMPORT_TABLE: u8 = 1;
+const IMPORT_GLOBAL: u8 = 3;
+const GLOBAL_TYPE_AND_MUTABILITY_BYTES: usize = 2;
+
+fn read_leb128(b: &[u8], i: &mut usize) -> u64 {
     let (mut v, mut s) = (0, 0);
     loop {
         let x = b[*i];
@@ -21,35 +27,33 @@ fn leb(b: &[u8], i: &mut usize) -> u64 {
 }
 
 fn name(b: &[u8], i: &mut usize) -> String {
-    let n = leb(b, i) as usize;
+    let n = read_leb128(b, i) as usize;
     *i += n;
     String::from_utf8_lossy(&b[*i - n..*i]).into()
 }
 
-/// `module.field` of each import of the module.
 fn imports(b: &[u8]) -> Vec<String> {
     assert_eq!(&b[..4], b"\0asm", "not a wasm module");
     let (mut i, mut out) = (8, Vec::new());
     while i < b.len() {
         let id = b[i];
         i += 1;
-        let end = leb(b, &mut i) as usize + i;
-        if id == 2 {
-            for _ in 0..leb(b, &mut i) {
+        let end = read_leb128(b, &mut i) as usize + i;
+        if id == IMPORT_SECTION {
+            for _ in 0..read_leb128(b, &mut i) {
                 let (module, field) = (name(b, &mut i), name(b, &mut i));
                 let kind = b[i];
                 i += 1;
                 match kind {
-                    // function: type index; global: type, mutability
-                    0 => _ = leb(b, &mut i),
-                    3 => i += 2,
-                    // table: element type then limits; memory: limits
+                    IMPORT_FUNCTION => _ = read_leb128(b, &mut i),
+                    IMPORT_GLOBAL => i += GLOBAL_TYPE_AND_MUTABILITY_BYTES,
                     _ => {
-                        i += (kind == 1) as usize;
-                        let flags = leb(b, &mut i);
-                        leb(b, &mut i);
+                        let table_element_type_bytes = (kind == IMPORT_TABLE) as usize;
+                        i += table_element_type_bytes;
+                        let flags = read_leb128(b, &mut i);
+                        read_leb128(b, &mut i);
                         if flags & 1 == 1 {
-                            leb(b, &mut i);
+                            read_leb128(b, &mut i);
                         }
                     }
                 }

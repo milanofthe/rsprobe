@@ -1,15 +1,14 @@
 //! The allocator measures `bytes`, `allocs` and `freed` with `Alloc` installed.
 #![cfg(feature = "alloc")]
 
-use rsprobe::{current, scope, Alloc, Context, Record};
+mod common;
+
+use common::get;
+use rsprobe::{current, scope, Alloc, Context};
 use std::hint::black_box;
 
 #[global_allocator]
 static A: Alloc = Alloc::new();
-
-fn get(r: &Record, path: &[&str], m: &str) -> u64 {
-    r.nodes[r.find(path).unwrap() as usize].get(m)
-}
 
 #[test]
 fn scopes_count_their_allocations_inclusively() {

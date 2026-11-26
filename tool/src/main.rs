@@ -18,17 +18,12 @@ Reads rsprobe run records; a set of records is a record file or a directory of t
   critical TRACE [--node PATH] [--depth N]
       the chain of spans that bounds a scope instance's elapsed time, from a trace";
 
-/// Positional arguments and options in order, flags with an empty value.
 struct Args {
     pos: Vec<String>,
     opts: Vec<(String, String)>,
 }
 
 impl Args {
-    /// Parses `argv` against the options in `spec`: `--name` a flag,
-    /// `--name=` with a value, `--name?` with an optional value (a following
-    /// word not starting with '-'). After `--`, and with `rest` from the first
-    /// positional on, everything is positional.
     fn parse(argv: &[String], spec: &[&str], rest: bool) -> Result<Args> {
         let mut a = Args {
             pos: Vec::new(),
@@ -83,7 +78,6 @@ impl Args {
         self.all(k).pop()
     }
 
-    /// The option's value as an integer, `default` without it.
     fn int(&self, k: &str, default: Option<usize>) -> Result<usize> {
         match self.one(k) {
             Some(v) => v
@@ -93,7 +87,6 @@ impl Args {
         }
     }
 
-    /// At most one of the options.
     fn exclusive(&self, ks: &[&str]) -> Result<()> {
         match ks
             .iter()
@@ -176,7 +169,6 @@ fn run(argv: &[String]) -> Result<i32> {
     Ok(0)
 }
 
-/// `compare`, or `ab` and the comparison of its sets; 1 where the gate fails.
 fn gate(ab: bool, argv: &[String]) -> Result<i32> {
     let (sets, a) = match ab {
         false => {

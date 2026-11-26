@@ -45,9 +45,17 @@ fn one_table_across_cases() {
         .iter()
         .map(|l| l.split_whitespace().collect())
         .collect();
-    // B takes twice A's time at every size: run wall with its unit, B/A 2.
-    assert_eq!(rows[0][..6], ["small", "10.0", "us", "20.0", "us", "2.000"]);
-    assert_eq!(rows[1][..6], ["large", "100", "us", "200", "us", "2.000"]);
+    let b_takes_twice_a = "B takes twice the time of A at every size";
+    assert_eq!(
+        rows[0][..6],
+        ["small", "10.0", "us", "20.0", "us", "2.000"],
+        "{b_takes_twice_a}"
+    );
+    assert_eq!(
+        rows[1][..6],
+        ["large", "100", "us", "200", "us", "2.000"],
+        "{b_takes_twice_a}"
+    );
     for r in &rows {
         assert_eq!(r[8..], ["slower", "0", "fails", "on", "(run)", "wall"]);
     }
@@ -64,12 +72,15 @@ fn order_rotates() {
         o.sort();
         assert_eq!(o, ["a", "aa", "b"]);
     }
-    // each block of three rounds puts every arm once in every position
     for block in s.chunks(3) {
         for i in 0..3 {
             let mut at: Vec<&str> = block.iter().map(|o| o[i]).collect();
             at.sort();
-            assert_eq!(at, ["a", "aa", "b"]);
+            assert_eq!(
+                at,
+                ["a", "aa", "b"],
+                "each block of three rounds puts every arm once in every position"
+            );
         }
     }
     assert!(s.iter().any(|o| *o != s[0]));

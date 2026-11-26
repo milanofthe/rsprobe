@@ -16,7 +16,6 @@ fn at(t: u64) {
     TIME.store(t, SeqCst);
 }
 
-/// (name, tid, ts, dur) of the "X" events, sorted.
 fn spans(v: &Value) -> Vec<(String, u64, f64, f64)> {
     let mut x: Vec<_> = v["traceEvents"]
         .as_array()
@@ -89,11 +88,11 @@ fn a_nested_run_as_trace_events() {
         (1, &"msg".into(), &0.into())
     );
     assert_eq!(i[0]["ts"].as_f64(), Some(5.5));
-    // The message adds its `emit` counter next to the one of `n`.
     let c: Vec<_> = of("C").into_iter().filter(|e| e["name"] == "n").collect();
     assert_eq!(
         (c.len(), &c[0]["name"], &c[0]["args"]["a 0"]),
-        (1, &"n".into(), &4.into())
+        (1, &"n".into(), &4.into()),
+        "the message adds its emit counter next to the one of n"
     );
 }
 

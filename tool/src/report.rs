@@ -143,9 +143,8 @@ pub fn rows(runs: &[Run], asked: &[(String, String)], summed: bool) -> (Vec<Row>
     let mut out = Vec::new();
     for p in preorder(&nodes.keys) {
         let v = nodes.get(&p).cloned().unwrap_or_default();
-        // Time of its own: a scope with self time and no tasks, so that no
-        // part of its work lies in the pool time of its tasks.
-        let own = v.get("calls") != 0.0 && v.get("self") > 0.0 && v.get("tasks") == 0.0;
+        let own_time_outside_any_pool =
+            v.get("calls") != 0.0 && v.get("self") > 0.0 && v.get("tasks") == 0.0;
         let mut row = Values(BUILTIN.iter().map(|&m| (m, v.get(m))).collect());
         row.0.extend(v.0.iter().filter(|m| !BUILTIN.contains(&m.0)));
         let v = &v;
@@ -153,7 +152,7 @@ pub fn rows(runs: &[Run], asked: &[(String, String)], summed: bool) -> (Vec<Row>
             mixed: mixed(v),
             share: overhead::share(v, &run, "time"),
             cost_share: cost_share(v),
-            ratios: ratios(v, &noisy, own, asked, &max),
+            ratios: ratios(v, &noisy, own_time_outside_any_pool, asked, &max),
             spread: spread.get(&p).cloned().unwrap_or_default(),
             path: p,
             v: row,
@@ -201,12 +200,9 @@ pub fn warnings(runs: &[Run]) -> (Vec<(Path, &'static str, String, u64)>, u64) {
 /// The allocator's counters in bytes; its `allocs` is a count.
 pub const BYTES: [&str; 3] = ["bytes", "freed", "peak"];
 
-/// Widths of the columns of times, calls and shares: the widest time
-/// below 1000 hours (`999:59:59`), count below a million (`999,999`) with
-/// the name `calls`, share (`100.0 %`).
-const TIME_WIDTH: usize = 9;
+const TIME_WIDTH: usize = "999:59:59".len();
 const CALLS_WIDTH: usize = 8;
-const SHARE_WIDTH: usize = 7;
+const SHARE_WIDTH: usize = "100.0 %".len();
 
 /// A value through its formatter, empty for zero.
 pub fn cell<D: std::fmt::Display>(f: fn(f64) -> D, x: f64) -> String {
@@ -217,22 +213,17 @@ pub fn cell<D: std::fmt::Display>(f: fn(f64) -> D, x: f64) -> String {
     }
 }
 
-/// A node's name indented by its depth, with `mark` after it.
 fn indented(p: &Path, mark: &str) -> String {
     let name = p.last().map_or("(run)", |s| s.0);
     format!("{}{name}{mark}", "  ".repeat(p.len()))
 }
 
-/// The label of a row: its indented name, ` !` where the scope cost is
-/// above [`OVERHEAD_MARK`] of its time and ` ?` where it is [`mixed`].
 fn label(r: &Row) -> String {
     let marks = [(r.cost_share > OVERHEAD_MARK, " !"), (r.mixed, " ?")];
     let mark: String = marks.iter().filter(|m| m.0).map(|m| m.1).collect();
     indented(&r.path, &mark)
 }
 
-/// A value of measure `m`: a size for the allocator's counters in bytes, a
-/// count otherwise.
 fn value(m: &str, x: f64) -> String {
     match BYTES.contains(&m) {
         true => bytes(x).to_string(),
@@ -294,7 +285,6 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
         0 => String::new(),
         n => format!(" Schema 2 in {n} of {k}: no split by kind of thread, busy includes the handle guard spans (wall + busy counts a section twice), worker_calls taken as calls where wall is 0."),
     };
-    // The time columns any node has a value in.
     let cols: Vec<&str> = ["wall", "busy", "pool"]
         .into_iter()
         .filter(|m| rs.iter().any(|r| r.v.get(m) != 0.0))
@@ -386,7 +376,6 @@ pub fn text(runs: &[Run], asked: &[(String, String)], summed: bool) -> String {
     }
     let (ws, dropped) = warnings(runs);
     if !ws.is_empty() || dropped > 0 {
-        // The node column as wide as its longest entry.
         let names: Vec<String> = ws.iter().map(|w| name(w.0.iter().map(|s| s.0))).collect();
         let w = names.iter().map(String::len).fold("node".len(), usize::max);
         out.push(String::new());

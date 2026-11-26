@@ -1,6 +1,6 @@
 //! The context: its settings, its tree, and the assembly of the record.
 
-use crate::alloc::quiet;
+use crate::alloc::uncounted;
 use crate::events::{Paced, Warnings};
 use crate::record::{Calibration, Node, Param, Record, ThreadNodes};
 use crate::site::{lock, registry, Registry};
@@ -15,12 +15,7 @@ use std::sync::{Arc, Mutex};
 /// A clock: nanoseconds since an arbitrary fixed origin, non-decreasing.
 pub type Clock = fn() -> u64;
 
-/// Built-in measures, exact or not; user measures follow by name, of the kind
-/// of their first site. `worker_calls`, `pool` and `tasks` are omitted from a
-/// node where they are zero. The last four are the counters of [`Alloc`](
-/// crate::Alloc), omitted from a record where they are zero at every node;
-/// `peak` is merged by maximum.
-const BUILTIN: [(&str, bool); 10] = [
+pub(crate) const BUILTIN: [(&str, bool); 10] = [
     ("calls", true),
     ("wall", false),
     ("busy", false),
@@ -41,7 +36,6 @@ pub(crate) const TASKS: usize = 5;
 pub(crate) const BYTES: usize = 6;
 pub(crate) const PEAK: usize = 9;
 
-/// Two values of a measure merged: by maximum or summed.
 fn merge(max: bool, a: u64, b: u64) -> u64 {
     if max {
         a.max(b)
@@ -62,13 +56,10 @@ pub fn now() -> u64 {
     epoch.elapsed().as_nanos() as u64
 }
 
-/// Shared by a context, its guards and the threads that entered it.
 pub(crate) struct Shared {
     pub(crate) id: u64,
-    /// Set when the [`Context`] drops.
     pub(crate) closed: AtomicBool,
     pub(crate) cfg: Builder,
-    /// The clock when the context was built.
     pub(crate) start: u64,
     pub(crate) tree: Mutex<Tree>,
     pub(crate) warnings: Mutex<Warnings>,
@@ -76,49 +67,39 @@ pub(crate) struct Shared {
     pub(crate) stream: Option<Mutex<Stream>>,
 }
 
-/// The nodes and every thread's cells of one context.
 pub(crate) struct Tree {
-    /// (parent, site) per node id; the root is (NONE, NONE).
-    keys: Vec<(u32, u32)>,
+    parent_site: Vec<(u32, u32)>,
     index: BTreeMap<(u32, u32), u32>,
-    /// (thread, node, cells).
     pub(crate) bases: Vec<(u32, u32, Box<Base>)>,
-    /// (thread, node, measure site, value) of user measures.
     pub(crate) extras: Vec<(u32, u32, u32, Box<AtomicU64>)>,
-    /// Per thread in order of first entry: whether through a handle.
     handles: Vec<bool>,
     params: Vec<(String, Param)>,
 }
 
 impl Tree {
-    /// The child of `node` for a scope site, added on first use.
     pub(crate) fn intern(&mut self, node: u32, site: u32) -> u32 {
-        let next = self.keys.len() as u32;
+        let next = self.parent_site.len() as u32;
         let c = *self.index.entry((node, site)).or_insert(next);
         if c == next {
-            self.keys.push((node, site));
+            self.parent_site.push((node, site));
         }
         c
     }
 
-    /// The index of a thread entering the context for the first time,
-    /// through a handle if `handle`.
     pub(crate) fn thread(&mut self, handle: bool) -> u32 {
         self.handles.push(handle);
         self.handles.len() as u32 - 1
     }
 
-    /// The name of the scope of `node`; `root` for the root.
     fn name(&self, r: &Registry, node: u32) -> &'static str {
-        match self.keys[node as usize].1 {
+        match self.parent_site[node as usize].1 {
             NONE => "root",
             s => r.name(s),
         }
     }
 
-    /// Writes the scope names from the root to `node`, joined by `/`.
     fn path(&self, r: &Registry, node: u32, f: &mut fmt::Formatter) -> fmt::Result {
-        let parent = self.keys[node as usize].0;
+        let parent = self.parent_site[node as usize].0;
         if parent != 0 {
             self.path(r, parent, f)?;
             f.write_char('/')?;
@@ -128,8 +109,6 @@ impl Tree {
 }
 
 impl Shared {
-    /// The level up to which sites of `module` are active: that of the
-    /// longest filter prefix covering the module, else the threshold.
     pub(crate) fn level(&self, module: &str) -> Level {
         let covers = |p: &str| {
             let rest = module.strip_prefix(p);
@@ -140,8 +119,6 @@ impl Shared {
         longest.map_or(self.cfg.threshold, |f| f.1)
     }
 
-    /// Writes the scope names from the root to `node`, joined by `/`; nothing
-    /// for the root.
     pub(crate) fn path(&self, node: u32, f: &mut fmt::Formatter) -> fmt::Result {
         match node {
             0 => Ok(()),
@@ -197,7 +174,9 @@ impl Builder {
     }
 
     /// The least time in ns between two progress events of a call site; one
-    /// second by default, 0 for every event. A run of a site begins with its
+    /// second by default, 0 for every event. The default is a rule and not a
+    /// measurement: a line a second reads as progress on a terminal and adds
+    /// 3600 lines an hour to a log file. A run of a site begins with its
     /// first event and ends with its closing one (`done >= total`); without
     /// a total each thread has a run of its own, and a new one begins where
     /// the units go down. An event passes
@@ -231,7 +210,7 @@ impl Builder {
             start: (self.clock)(),
             cfg: self,
             tree: Mutex::new(Tree {
-                keys: vec![(NONE, NONE)],
+                parent_site: vec![(NONE, NONE)],
                 index: BTreeMap::new(),
                 bases: Vec::new(),
                 extras: Vec::new(),
@@ -253,8 +232,6 @@ pub struct Context {
 }
 
 impl Drop for Context {
-    /// Unregisters the context; threads still holding it record nothing more
-    /// in it and let it go when they next enter a context.
     fn drop(&mut self) {
         self.shared.closed.store(true, Relaxed);
         registry().remove(self.shared.id);
@@ -316,7 +293,7 @@ impl Context {
 
     fn take(&self, per_thread: bool) -> Record {
         let calibration = match cfg!(feature = "on") {
-            true => quiet(|| calibrate(self.shared.cfg.clock)),
+            true => uncounted(|| calibrate(self.shared.cfg.clock)),
             false => Calibration::default(),
         };
         self.sums(calibration, per_thread)
@@ -340,33 +317,29 @@ impl Context {
             e.map(|e| e.flush())
         });
         let (s, t, r) = (lock(stream), lock(&self.shared.tree), registry());
-        let parent = |n: u32| Some(t.keys[n as usize].0).filter(|&p| p != NONE);
+        let parent = |n: u32| Some(t.parent_site[n as usize].0).filter(|&p| p != NONE);
         s.write(self.shared.start, |n| t.name(&r, n), parent, |m| r.name(m))
     }
 
-    /// [`record`](Self::record) with the given calibration constants, and
-    /// with each thread's values if `per_thread`.
     fn sums(&self, calibration: Calibration, per_thread: bool) -> Record {
         let (t, r) = (lock(&self.shared.tree), registry());
-        // The nodes with the cells of the threads `of` accepts merged.
-        let merged = |of: &dyn Fn(u32) -> bool| {
+        let merged = |includes_thread: &dyn Fn(u32) -> bool| {
             let node = |&(p, s): &(u32, u32)| Node {
                 parent: (p != NONE).then_some(p),
                 site: (s != NONE).then_some(s),
                 values: BUILTIN.iter().map(|m| (m.0, 0)).collect(),
             };
-            let mut nodes: Vec<Node> = t.keys.iter().map(node).collect();
-            for (_, n, b) in t.bases.iter().filter(|c| of(c.0)) {
+            let mut nodes: Vec<Node> = t.parent_site.iter().map(node).collect();
+            for (_, n, b) in t.bases.iter().filter(|c| includes_thread(c.0)) {
                 let values = nodes[*n as usize].values.iter_mut();
                 for (i, (v, c)) in values.zip(b.iter()).enumerate() {
                     v.1 = merge(i == PEAK, v.1, c.load(Relaxed));
                 }
             }
-            // A thread counts a scope on a worker in `worker_calls` alone.
             for n in &mut nodes {
                 n.values[CALLS].1 += n.values[WORKER_CALLS].1;
             }
-            for (_, n, s, c) in t.extras.iter().filter(|c| of(c.0)) {
+            for (_, n, s, c) in t.extras.iter().filter(|c| includes_thread(c.0)) {
                 let site = r.sites[*s as usize];
                 let (name, values) = (site.name, &mut nodes[*n as usize].values);
                 match values.iter_mut().find(|v| v.0 == name) {
@@ -410,7 +383,7 @@ impl Context {
                 nodes,
             }
         });
-        let mut sites: Vec<u32> = t.keys[1..].iter().map(|k| k.1).collect();
+        let mut sites: Vec<u32> = t.parent_site[1..].iter().map(|k| k.1).collect();
         sites.sort_unstable();
         sites.dedup();
         let w = lock(&self.shared.warnings);
@@ -432,9 +405,6 @@ impl Context {
     }
 }
 
-/// Times empty scopes in a context of its own: the mean elapsed time an empty
-/// scope records (inner) and the mean cost per scope its parent sees beyond
-/// that (outer).
 fn calibrate(clock: Clock) -> Calibration {
     let ctx = Context::builder()
         .threshold(Level::TRACE)

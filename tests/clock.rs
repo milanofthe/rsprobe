@@ -48,9 +48,13 @@ fn wall_busy_and_pool() {
     let node = |p: &[&str]| &r.nodes[r.find(p).unwrap() as usize];
     assert_eq!(r.nodes[0].get("wall"), 900);
     assert_eq!(node(&["par"]).get("wall"), 400);
-    // the section's scope ran on the calling thread only
-    assert_eq!(node(&["par"]).get("busy"), 0);
-    assert_eq!(node(&["par"]).get("worker_calls"), 0);
+    let calling_thread_only = "the section's scope ran on the calling thread only";
+    assert_eq!(node(&["par"]).get("busy"), 0, "{calling_thread_only}");
+    assert_eq!(
+        node(&["par"]).get("worker_calls"),
+        0,
+        "{calling_thread_only}"
+    );
     assert_eq!(node(&["par"]).get("pool"), 200);
     assert_eq!(node(&["par"]).get("tasks"), 1);
     let work = node(&["par", "work"]);
@@ -58,12 +62,12 @@ fn wall_busy_and_pool() {
     assert_eq!([work.get("calls"), work.get("worker_calls")], [1, 1]);
     assert_eq!([work.get("pool"), work.get("tasks")], [0, 0]);
     assert_eq!(r.calibration.inner_ns, 0.0);
-    // zero split measures are not written
-    assert!(!work.values.iter().any(|v| v.0 == "pool" || v.0 == "tasks"));
+    assert!(
+        !work.values.iter().any(|v| v.0 == "pool" || v.0 == "tasks"),
+        "zero split measures are not written"
+    );
 }
 
-/// A scope that runs once on the calling thread and once on a worker, and a
-/// section whose tasks run once on a worker and once on the calling thread.
 #[test]
 fn a_scope_on_both_kinds_of_thread() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -84,8 +88,8 @@ fn a_scope_on_both_kinds_of_thread() {
         drop(g);
     };
     std::thread::spawn(move || task(200)).join().unwrap();
-    // the calling thread runs a task itself: the node moves, no task counted
-    task(300);
+    let task_run_by_the_calling_thread = 300;
+    task(task_run_by_the_calling_thread);
     at(400);
     drop(sec);
     at(500);
@@ -102,7 +106,6 @@ fn a_scope_on_both_kinds_of_thread() {
     assert_eq!([work.get("calls"), work.get("worker_calls")], [2, 1]);
     assert_eq!([work.get("wall"), work.get("busy")], [30, 30]);
     assert_eq!(r.nodes[0].get("wall"), 500);
-    // per thread the same split
     let w = r.find(&["sec", "work"]).unwrap() as usize;
     let of = |handle: bool| {
         &r.per_thread

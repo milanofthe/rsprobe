@@ -58,9 +58,7 @@ fn threads_and_handles_sum_under_their_node() {
                 });
             }
         });
-        // Inline on the entering thread, as a pool runs a task on its caller:
-        // the node only, its time stays wall of this thread.
-        let _g = h.enter();
+        let _task_inline_on_the_entering_thread = h.enter();
         leaf();
     }
     let r = ctx.record();
@@ -119,7 +117,8 @@ fn no_context_records_nothing() {
 fn record_parses_and_round_trips() {
     let ctx = Context::new();
     ctx.param("n", 1000);
-    ctx.param("tol", 1e-9);
+    let tol = 1e-9;
+    ctx.param("tol", tol);
     ctx.param("case", "a \"quoted\"\nname");
     {
         let _on = ctx.enter();
@@ -131,7 +130,7 @@ fn record_parses_and_round_trips() {
     let v: serde_json::Value = serde_json::from_str(&r.to_string()).unwrap();
     assert_eq!(v["schema"], 3);
     assert_eq!(v["params"]["n"].as_f64(), Some(1000.0));
-    assert_eq!(v["params"]["tol"].as_f64(), Some(1e-9));
+    assert_eq!(v["params"]["tol"].as_f64(), Some(tol));
     assert_eq!(v["params"]["case"], "a \"quoted\"\nname");
     assert_eq!(
         v["calibration"]["inner_ns"].as_f64(),
@@ -190,7 +189,6 @@ fn guards_dropped_out_of_order_leave_no_context_current() {
     let g = current().enter();
     drop(on);
     drop(g);
-    // The node `g` restores belongs to a guard already dropped.
     let s = scope!("after");
     add!("after", 1);
     rsprobe::info!("after");
@@ -209,8 +207,7 @@ fn a_handle_entered_where_its_context_is_current_only_moves_the_node() {
         let _a = scope!("a");
         let h = current();
         let _b = scope!("b");
-        // the issuing thread runs a task of `a` itself, while under `b`
-        let _task = h.enter();
+        let _task_of_a_run_by_the_issuing_thread_under_b = h.enter();
         let _t = scope!("task");
     }
     drop(on);

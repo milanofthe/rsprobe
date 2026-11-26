@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{run, Hand};
+use common::{constants::ROUND_OFF, run, Hand};
 use rsprobe::{Event, Kind, Level, Node, Param, Site, ThreadNodes};
 use rsprobe_tool::records::Path;
 use rsprobe_tool::report::{self, asked_ratio, Row};
@@ -27,11 +27,13 @@ fn line<'a>(text: &'a str, start: &str) -> &'a str {
 }
 
 fn near(a: f64, b: f64) {
-    assert!((a - b).abs() < 1e-9 * b.abs().max(1.0), "{a} != {b}");
+    assert!((a - b).abs() < ROUND_OFF * b.abs().max(1.0), "{a} != {b}");
 }
 
-// inner 10 ns, outer 5 ns, so full 15 ns. A serial solve with iterations
-// and a section `par` on the calling thread whose four tasks ran on workers.
+const INNER: f64 = 10.0;
+const OUTER: f64 = 5.0;
+const FULL: f64 = INNER + OUTER;
+
 const NODES: common::Tree = &[
     (&[], &[("wall", 10000)]),
     (&["solve"], &[("calls", 2), ("wall", 8000)]),
@@ -62,8 +64,8 @@ const NODES: common::Tree = &[
 
 fn calibrated(noisy: Vec<&'static str>) -> Hand {
     Hand {
-        inner: 10.0,
-        outer: 5.0,
+        inner: INNER,
+        outer: OUTER,
         noisy,
         ..Hand::default()
     }
@@ -75,21 +77,22 @@ fn nodes() -> Vec<Run> {
 
 #[test]
 fn correction_and_shares() {
-    // By hand, with c = calls - worker_calls:
-    // it:    wall 5000 - 10*10         = 4900, self 4900
-    // solve: wall 8000 - 2*10 - 10*15  = 7830, self 7830 - 4900 = 2930
-    // task:  busy 3500 - 4*10          = 3460, self 3460
-    // par:   wall 1000 - 1*10          = 990 (task on workers), self 990
-    //        pool 3600 - 4*15          = 3540 (task under its handles)
-    // run:   wall 10000 - (2+10+1)*15  = 9805, self 9805 - 7830 - 990 = 985
-    // thread time 9805 + 3540 = 13345; cost 17*15 = 255 of 10000 + 3600.
-    let t = 13345.0;
+    let it = 5000.0 - 10.0 * INNER;
+    let solve = 8000.0 - 2.0 * INNER - 10.0 * FULL;
+    let task = 3500.0 - 4.0 * INNER;
+    let par_wall = 1000.0 - INNER;
+    let par_pool = 3600.0 - 4.0 * FULL;
+    let run_wall = 10000.0 - (2.0 + 10.0 + 1.0) * FULL;
+    let t = run_wall + par_pool;
     let expected: [(&[&str], [f64; 4]); 5] = [
-        (&[], [9805.0, 0.0, 985.0, 9805.0 / t]),
-        (&["solve"], [7830.0, 0.0, 2930.0, 7830.0 / t]),
-        (&["solve", "it"], [4900.0, 0.0, 4900.0, 4900.0 / t]),
-        (&["par"], [990.0, 0.0, 990.0, 990.0 / t]),
-        (&["par", "task"], [0.0, 3460.0, 3460.0, 3460.0 / t]),
+        (
+            &[],
+            [run_wall, 0.0, run_wall - solve - par_wall, run_wall / t],
+        ),
+        (&["solve"], [solve, 0.0, solve - it, solve / t]),
+        (&["solve", "it"], [it, 0.0, it, it / t]),
+        (&["par"], [par_wall, 0.0, par_wall, par_wall / t]),
+        (&["par", "task"], [0.0, task, task, task / t]),
     ];
     let (rows, run) = report::rows(&nodes(), &[], true);
     for (p, [wall, busy, own, share]) in expected {
@@ -101,14 +104,20 @@ fn correction_and_shares() {
         );
         near(r.share, share);
     }
-    assert_eq!(row(&rows, &["par"]).v.get("pool"), 3540.0);
+    assert_eq!(row(&rows, &["par"]).v.get("pool"), par_pool);
     assert_eq!(
         [run.get("wall"), run.get("pool"), run.get("thread")],
-        [9805.0, 3540.0, t]
+        [run_wall, par_pool, t]
     );
-    near(run.get("cost") / run.get("raw"), 255.0 / 13600.0);
-    // Scope cost of it: 100 of 5000.
-    near(row(&rows, &["solve", "it"]).cost_share, 0.02);
+    let scopes = 2.0 + 10.0 + 1.0 + 4.0;
+    near(
+        run.get("cost") / run.get("raw"),
+        scopes * FULL / (10000.0 + 3600.0),
+    );
+    near(
+        row(&rows, &["solve", "it"]).cost_share,
+        10.0 * INNER / 5000.0,
+    );
     let order: Vec<Vec<&str>> = rows.iter().map(|r| names(&r.path)).collect();
     assert_eq!(order, expected.map(|e| e.0.to_vec()));
 }
@@ -125,10 +134,10 @@ fn ratios_per_unit_and_share() {
         ratios(row(&rows, &["par", "task"])),
         [("ns/nnz", 3460.0 / 700.0)]
     );
-    // a noisy measure is a time: its share of the node's, not per unit
     assert_eq!(
         ratios(row(&rows, &["par"])),
-        [("wait/time", 198.0 / 990.0), ("pool/wall", 3540.0 / 990.0)]
+        [("wait/time", 198.0 / 990.0), ("pool/wall", 3540.0 / 990.0)],
+        "a noisy measure is a time and gets its share of the time of the node"
     );
     let text = report::text(&runs, &[], false);
     assert!(line(&text, "  par").contains("wait 198 ns (20.0 %)"));
@@ -161,8 +170,10 @@ fn mark_above_the_stated_share() {
             (&["tiny"], &[("calls", 10), ("wall", 200)]),
         ],
     )];
-    // Scope cost 10*3 of 200 = 15 percent, above the 10 percent mark.
-    assert!(line(&report::text(&runs, &[], false), "  tiny").starts_with("  tiny ! "));
+    assert!(
+        line(&report::text(&runs, &[], false), "  tiny").starts_with("  tiny ! "),
+        "a scope cost of 10 * 3 ns of 200 ns lies above the mark"
+    );
 }
 
 #[test]
@@ -225,11 +236,10 @@ fn schema_is_checked_and_the_reader_reads_what_the_crate_writes() {
 
 #[test]
 fn schema_2_is_read_and_named() {
-    // as the crate wrote it before: the handle guards' spans in busy of par
-    let mut old = NODES.to_vec();
-    old[3] = (&["par"], &[("calls", 1), ("wall", 1000), ("busy", 3600)]);
-    old[4] = (&["par", "task"], &[("calls", 4), ("busy", 3500)]);
-    let json = common::run(&old).record.to_string();
+    let mut handle_spans_in_busy = NODES.to_vec();
+    handle_spans_in_busy[3] = (&["par"], &[("calls", 1), ("wall", 1000), ("busy", 3600)]);
+    handle_spans_in_busy[4] = (&["par", "task"], &[("calls", 4), ("busy", 3500)]);
+    let json = common::run(&handle_spans_in_busy).record.to_string();
     let run = rsprobe_tool::read("old.json", &json.replace("\"schema\":3", "\"schema\":2"));
     let run = run.unwrap();
     assert_eq!(run.schema, 2);
@@ -323,7 +333,6 @@ fn warnings_after_the_tree() {
         .position(|l| *l == "warnings, summed:")
         .unwrap();
     assert!(at > lines.iter().rposition(|l| l.starts_with("    it")).unwrap());
-    // The first three words and the rest of the line.
     let split = |l: &'static str| {
         let mut rest = l.trim_start();
         let mut out: Vec<&str> = (0..3)
@@ -395,9 +404,6 @@ fn no_warnings_no_section() {
     assert!(!report::text(&[run(&[(&[], &[("wall", 100)])])], &[], false).contains("warnings"));
 }
 
-// Two sections on the calling thread: `par`, whose four tasks run `outer`
-// with `inner` inside it on the worker, and `sec` with 100 tasks of one
-// `task` each. inner 10 ns, outer 5 ns.
 const WORKERS: common::Tree = &[
     (&[], &[("wall", 10000)]),
     (
@@ -440,23 +446,22 @@ fn workers() -> Vec<Run> {
 
 #[test]
 fn correction_per_kind_of_thread() {
-    // By hand; a time a node has none of is not corrected:
-    // inner: busy 20000 - 8*10            = 19920, self 19920
-    // outer: busy 38000 - 4*10 - 8*15     = 37840, self 37840 - 19920 = 17920
-    // par:   wall 3000 - 10               = 2990, self 2990
-    //        pool 40000 - (4+8)*15        = 39820
-    // task:  busy 30000 - 100*10          = 29000, self 29000
-    // sec:   wall 2000 - 10               = 1990, self 1990
-    //        pool 31000 - 100*15          = 29500
-    // run:   wall 10000 - 2*15            = 9970, self 9970 - 2990 - 1990 = 4990
-    //        thread time 9970 + 39820 + 29500 = 79290
+    let inner = 20000.0 - 8.0 * INNER;
+    let outer = 38000.0 - 4.0 * INNER - 8.0 * FULL;
+    let par_wall = 3000.0 - INNER;
+    let par_pool = 40000.0 - (4.0 + 8.0) * FULL;
+    let task = 30000.0 - 100.0 * INNER;
+    let sec_wall = 2000.0 - INNER;
+    let sec_pool = 31000.0 - 100.0 * FULL;
+    let run_wall = 10000.0 - 2.0 * FULL;
+    let thread = run_wall + par_pool + sec_pool;
     let expected: [(&[&str], [f64; 4]); 6] = [
-        (&[], [9970.0, 0.0, 0.0, 4990.0]),
-        (&["par"], [2990.0, 0.0, 39820.0, 2990.0]),
-        (&["par", "outer"], [0.0, 37840.0, 0.0, 17920.0]),
-        (&["par", "outer", "inner"], [0.0, 19920.0, 0.0, 19920.0]),
-        (&["sec"], [1990.0, 0.0, 29500.0, 1990.0]),
-        (&["sec", "task"], [0.0, 29000.0, 0.0, 29000.0]),
+        (&[], [run_wall, 0.0, 0.0, run_wall - par_wall - sec_wall]),
+        (&["par"], [par_wall, 0.0, par_pool, par_wall]),
+        (&["par", "outer"], [0.0, outer, 0.0, outer - inner]),
+        (&["par", "outer", "inner"], [0.0, inner, 0.0, inner]),
+        (&["sec"], [sec_wall, 0.0, sec_pool, sec_wall]),
+        (&["sec", "task"], [0.0, task, 0.0, task]),
     ];
     let (rows, run) = report::rows(&workers(), &[], true);
     for (p, v) in expected {
@@ -467,15 +472,13 @@ fn correction_per_kind_of_thread() {
     }
     assert_eq!(
         [run.get("wall"), run.get("pool"), run.get("thread")],
-        [9970.0, 69320.0, 79290.0]
+        [run_wall, par_pool + sec_pool, thread]
     );
-    near(row(&rows, &["sec", "task"]).share, 29000.0 / 79290.0);
+    near(row(&rows, &["sec", "task"]).share, task / thread);
 }
 
 #[test]
 fn a_node_with_tasks_and_worker_instances_is_marked() {
-    // `block` runs on workers inside the tasks of `par` and has tasks of its
-    // own: its leaves are taken as run in its tasks.
     let tree: common::Tree = &[
         (&[], &[("wall", 1000)]),
         (
@@ -499,13 +502,19 @@ fn a_node_with_tasks_and_worker_instances_is_marked() {
     ];
     let runs = [calibrated(vec![]).run("m.json", tree)];
     let (rows, _) = report::rows(&runs, &[], true);
-    // block: busy 1500 - 2*10 = 1480, pool 600 - 6*15 = 510, self 1480
-    // par:   pool 1600 - 2*15 = 1570 (leaf lies below block's tasks)
     let block = row(&rows, &["par", "block"]);
-    assert!(block.mixed && !row(&rows, &["par"]).mixed);
+    assert!(
+        block.mixed && !row(&rows, &["par"]).mixed,
+        "block has tasks and worker instances of its own"
+    );
+    let block_busy = 1500.0 - 2.0 * INNER;
     let got = ["busy", "pool", "self"].map(|m| block.v.get(m));
-    assert_eq!(got, [1480.0, 510.0, 1480.0]);
-    assert_eq!(row(&rows, &["par"]).v.get("pool"), 1570.0);
+    assert_eq!(got, [block_busy, 600.0 - 6.0 * FULL, block_busy]);
+    assert_eq!(
+        row(&rows, &["par"]).v.get("pool"),
+        1600.0 - 2.0 * FULL,
+        "the leaf lies below the tasks of block, not in the pool of par"
+    );
     let text = report::text(&runs, &[], false);
     assert!(line(&text, "    block").starts_with("    block ? "));
     assert!(!line(&text, "  par").contains('?'));
@@ -522,11 +531,10 @@ fn an_open_root_has_no_self_time() {
 #[test]
 fn ns_per_unit_only_where_the_time_is_the_nodes_own() {
     let (rows, _) = report::rows(&workers(), &[], true);
-    // sec has tasks, its work is in their pool time: no ns/width, no
-    // ns/sections
     assert_eq!(
         ratios(row(&rows, &["sec"])),
-        [("pool/wall", 29500.0 / 1990.0)]
+        [("pool/wall", 29500.0 / 1990.0)],
+        "sec has tasks, so its work lies in their pool time and gets no ns per unit"
     );
     assert_eq!(
         ratios(row(&rows, &["sec", "task"])),
@@ -554,8 +562,6 @@ fn asked_ratios() {
     assert!(asked_ratio("width").is_err());
 }
 
-// Three rounds of one run: wall varies, nnz is exact and equal, iterations
-// differ in one round, peak is a level. No scope cost.
 fn rounds() -> Vec<Run> {
     let hand = Hand {
         maxima: vec!["peak"],
@@ -602,10 +608,10 @@ fn medians_with_the_range() {
         ]
     );
     near(r.share, 0.5);
-    // a level has no time per unit
     assert_eq!(
         ratios(r),
-        [("ns/nnz", 10.0), ("ns/iterations", 500.0 / 7.0)]
+        [("ns/nnz", 10.0), ("ns/iterations", 500.0 / 7.0)],
+        "a level has no time per unit"
     );
 }
 
@@ -670,9 +676,6 @@ fn max_is_merged_by_maximum() {
     assert_eq!((solve.get("peak"), solve.get("nnz")), (700.0, 20.0));
 }
 
-/// A record of a section `par` whose tasks ran on two workers, with each
-/// thread's values: the calling thread at the root and `par`, two workers at
-/// `par/task` with unequal busy time.
 fn with_threads(threads: bool) -> Run {
     let task = [
         ("calls", 3),
@@ -758,7 +761,6 @@ fn threads_at_a_node() {
     let out = report::threads(&[with_threads(true)], Some("par/task")).unwrap();
     let lines: Vec<&str> = out.lines().collect();
     assert!(lines[0].ends_with("3 threads, recorded values (scope cost not subtracted)"));
-    // Each time in its unit, an empty cell for zero.
     assert_eq!(
         lines[1..],
         [

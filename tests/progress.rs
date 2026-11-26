@@ -7,8 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
 
 static TIME: AtomicU64 = AtomicU64::new(0);
 
-/// Progress `done` of 10 from one call site at `ms` after the context was
-/// built.
 fn step(ms: u64, done: u64) {
     TIME.store(ms * 1_000_000, SeqCst);
     progress!(done, 10);
@@ -22,14 +20,12 @@ fn a_site_reports_once_an_interval_and_the_end_of_a_run_it_reported() {
         .sink(buffer.clone())
         .build();
     let _on = ctx.enter();
-    // A long run: nothing in its first second, then once a second and its end.
     step(200, 1);
     step(1000, 2);
     step(1500, 3);
     step(2100, 4);
     step(2600, 5);
     step(2700, 10);
-    // Short runs, also long after the last event that passed: nothing.
     step(2800, 5);
     step(2900, 10);
     step(9000, 1);
@@ -37,9 +33,11 @@ fn a_site_reports_once_an_interval_and_the_end_of_a_run_it_reported() {
     let mut seen = Vec::new();
     buffer.drain(|e, _| seen.push((e.time / 1_000_000, e.kind.to_string())));
     let expected = [(1500, "3/10"), (2600, "5/10"), (2700, "10/10")];
-    assert_eq!(seen, expected.map(|(t, s)| (t, s.to_string())));
-    // With a text and no known total: the text is formatted when the event
-    // passes, and no event closes the run.
+    assert_eq!(
+        seen,
+        expected.map(|(t, s)| (t, s.to_string())),
+        "a long run passes once a second after its first second and at its end, short runs never"
+    );
     let formatted = AtomicU64::new(0);
     let residual = |k: u64, ms: u64| {
         TIME.store(ms * 1_000_000, SeqCst);
@@ -51,14 +49,17 @@ fn a_site_reports_once_an_interval_and_the_end_of_a_run_it_reported() {
     residual(1, 10000);
     residual(2, 10100);
     residual(4, 11000);
-    // The units go down: a new run, silent in its first second.
     residual(1, 13000);
     residual(2, 13900);
     residual(3, 14000);
     let mut seen = Vec::new();
     buffer.drain(|e, _| seen.push(e.kind.to_string()));
     assert_eq!(seen, ["4 residual 0.25", "3 residual 0.3333333333333333"]);
-    assert_eq!(formatted.load(SeqCst), 2);
+    assert_eq!(
+        formatted.load(SeqCst),
+        2,
+        "the text is formatted only for an event that passes"
+    );
 }
 
 #[test]
@@ -72,8 +73,6 @@ fn loops_without_a_total_on_two_threads_are_two_runs() {
         .build();
     let _on = ctx.enter();
     let h = current();
-    // One call site, called in turn from this thread and from a worker
-    // whose count is lower: neither restarts the other's run.
     let count = |k: u64| progress!(k, 0; "iteration");
     let worker = |k: u64| {
         std::thread::spawn(move || {
@@ -90,7 +89,11 @@ fn loops_without_a_total_on_two_threads_are_two_runs() {
     count(60);
     let mut seen = Vec::new();
     buffer.drain(|e, _| seen.push(e.kind.to_string()));
-    assert_eq!(seen, ["60 iteration"]);
+    assert_eq!(
+        seen,
+        ["60 iteration"],
+        "the worker's lower count does not restart the run of this thread"
+    );
 }
 
 #[test]
@@ -103,9 +106,7 @@ fn threads_of_one_run_read_the_clock_in_the_order_they_pace() {
     static READ: AtomicBool = AtomicBool::new(false);
     static OTHER_DONE: AtomicBool = AtomicBool::new(false);
     thread_local!(static HOLD: Cell<bool> = const { Cell::new(false) });
-    // The clock of this thread's next read, held until the other thread's
-    // event has passed or a lock keeps it out.
-    fn clock() -> u64 {
+    fn clock_held_until_the_other_thread_reported() -> u64 {
         let t = CLOCK.load(SeqCst);
         if HOLD.with(|h| h.replace(false)) {
             READ.store(true, SeqCst);
@@ -116,13 +117,12 @@ fn threads_of_one_run_read_the_clock_in_the_order_they_pace() {
         }
         t
     }
-    // One call site for both threads.
-    fn report(done: u64) {
+    fn report_from_one_site(done: u64) {
         progress!(done, 10);
     }
     let buffer = Buffer::default();
     let ctx = Context::builder()
-        .clock(clock)
+        .clock(clock_held_until_the_other_thread_reported)
         .progress_interval(0)
         .sink(buffer.clone())
         .build();
@@ -134,12 +134,12 @@ fn threads_of_one_run_read_the_clock_in_the_order_they_pace() {
             std::thread::yield_now();
         }
         CLOCK.store(2_000_000, SeqCst);
-        report(2);
+        report_from_one_site(2);
         OTHER_DONE.store(true, SeqCst);
     });
     CLOCK.store(1_000_000, SeqCst);
     HOLD.with(|h| h.set(true));
-    report(1);
+    report_from_one_site(1);
     other.join().unwrap();
     let mut seen = Vec::new();
     buffer.drain(|e, _| seen.push(e.kind.to_string()));

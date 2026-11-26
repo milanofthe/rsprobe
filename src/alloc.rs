@@ -48,19 +48,12 @@ impl<A> Alloc<A> {
     }
 }
 
-/// Counters a guard carries: `bytes`, `allocs`, `freed` and the high-water
-/// mark with the feature `alloc`, none without, so that a scope costs what it
-/// did before.
-pub(crate) const N: usize = if cfg!(feature = "alloc") { 4 } else { 0 };
+pub(crate) const COUNTERS: usize = if cfg!(feature = "alloc") { 4 } else { 0 };
 
 thread_local! {
-    /// This thread's `bytes`, `allocs`, `freed`, and the largest live bytes
-    /// since the innermost open guard (as `i64`).
-    static COUNTS: [Cell<u64>; N] = const { [const { Cell::new(0) }; N] };
+    static COUNTS: [Cell<u64>; COUNTERS] = const { [const { Cell::new(0) }; COUNTERS] };
 }
 
-/// Adds `bytes`, `allocs` and `freed` to this thread's counters and raises
-/// the high-water mark after an allocation.
 #[inline]
 fn count(add: [u64; 3]) {
     if cfg!(feature = "alloc") {
@@ -78,25 +71,21 @@ fn count(add: [u64; 3]) {
     }
 }
 
-/// `f` of this thread's counters; zeros without the feature `alloc`.
 #[inline]
-fn on_counts(f: impl FnOnce(&[Cell<u64>; N]) -> [u64; N]) -> [u64; N] {
+fn on_counts(f: impl FnOnce(&[Cell<u64>; COUNTERS]) -> [u64; COUNTERS]) -> [u64; COUNTERS] {
     match cfg!(feature = "alloc") {
-        true => COUNTS.try_with(f).unwrap_or([0; N]),
-        false => [0; N],
+        true => COUNTS.try_with(f).unwrap_or([0; COUNTERS]),
+        false => [0; COUNTERS],
     }
 }
 
-/// This thread's counters; zeros where no [`Alloc`] is installed.
 #[inline]
-pub(crate) fn counts() -> [u64; N] {
+pub(crate) fn counts() -> [u64; COUNTERS] {
     on_counts(|c| c.each_ref().map(Cell::get))
 }
 
-/// This thread's counters at a guard's entry, with the high-water mark
-/// before it; the mark restarts at the live bytes.
 #[inline]
-pub(crate) fn open() -> [u64; N] {
+pub(crate) fn open() -> [u64; COUNTERS] {
     on_counts(|c| {
         let at = c.each_ref().map(Cell::get);
         if let [b, _, f, high] = c.as_slice() {
@@ -106,11 +95,8 @@ pub(crate) fn open() -> [u64; N] {
     })
 }
 
-/// The differences of `bytes`, `allocs` and `freed` since [`open`] returned
-/// `at`, and the peak; the high-water mark before the guard is raised to the
-/// one inside it.
 #[inline]
-pub(crate) fn close(at: &[u64; N]) -> [u64; N] {
+pub(crate) fn close(at: &[u64; COUNTERS]) -> [u64; COUNTERS] {
     on_counts(|c| {
         let mut d = c.each_ref().map(Cell::get);
         if let ([b, a, f, high], [b0, a0, f0, high0], [.., mark]) =
@@ -126,9 +112,7 @@ pub(crate) fn close(at: &[u64; N]) -> [u64; N] {
     })
 }
 
-/// Runs `f` and resets this thread's counters to their values before it: the
-/// allocations of the instrumentation itself are not counted.
-pub(crate) fn quiet<T>(f: impl FnOnce() -> T) -> T {
+pub(crate) fn uncounted<T>(f: impl FnOnce() -> T) -> T {
     let before = counts();
     let r = f();
     if cfg!(feature = "alloc") {

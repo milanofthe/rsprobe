@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicU32, AtomicU8, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 /// Importance of a call site. A site is active when its level is at most the
-/// threshold of the current context.
+/// threshold of the current context. `FromStr` reads a [`name`](Level::name)
+/// in any case and with surrounding whitespace, as a host reads it from an
+/// environment variable, a project file or its own API.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Level(pub(crate) u8);
 
@@ -43,8 +45,6 @@ impl Level {
 impl std::str::FromStr for Level {
     type Err = String;
 
-    /// The level of a [`name`](Level::name), in any case: what a host reads
-    /// from an environment variable, a project file or its own API.
     fn from_str(name: &str) -> Result<Level, String> {
         let known = |l: &Level| l.name().eq_ignore_ascii_case(name.trim());
         Level::ALL.into_iter().find(known).ok_or_else(|| {
@@ -75,8 +75,7 @@ pub struct Site {
     /// For a measure site: merged by maximum ([`max!`](crate::max)) instead
     /// of summed; `exact` is true.
     pub max: bool,
-    /// Id plus one; zero until registered.
-    id: AtomicU32,
+    id_plus_one: AtomicU32,
 }
 
 impl Site {
@@ -88,7 +87,6 @@ impl Site {
         line: u32,
         level: Level,
     ) -> Site {
-        let id = AtomicU32::new(0);
         Site {
             name,
             module,
@@ -97,7 +95,7 @@ impl Site {
             level,
             exact: true,
             max: false,
-            id,
+            id_plus_one: AtomicU32::new(0),
         }
     }
 
@@ -113,28 +111,25 @@ impl Site {
         self
     }
 
-    /// The id, registered under the registry's lock on first use.
     #[inline]
     pub(crate) fn id(&'static self) -> u32 {
-        match self.id.load(Relaxed) {
-            0 => crate::alloc::quiet(|| self.register()),
-            id => id - 1,
+        match self.id_plus_one.load(Relaxed) {
+            0 => crate::alloc::uncounted(|| self.register()),
+            id_plus_one => id_plus_one - 1,
         }
     }
 
     #[cold]
     fn register(&'static self) -> u32 {
         let mut r = registry();
-        if self.id.load(Relaxed) == 0 {
+        if self.id_plus_one.load(Relaxed) == 0 {
             r.sites.push(self);
-            self.id.store(r.sites.len() as u32, Relaxed);
+            self.id_plus_one.store(r.sites.len() as u32, Relaxed);
         }
-        self.id.load(Relaxed) - 1
+        self.id_plus_one.load(Relaxed) - 1
     }
 }
 
-/// Process-wide: the call sites by id and the live contexts with their
-/// highest level.
 pub(crate) struct Registry {
     pub(crate) sites: Vec<&'static Site>,
     contexts: Vec<(u64, Level, Weak<Shared>)>,
@@ -145,11 +140,8 @@ static REGISTRY: Mutex<Registry> = Mutex::new(Registry {
     contexts: Vec::new(),
 });
 
-/// Highest threshold or filter level of all live contexts; 0 when there is none.
-pub(crate) static MAX: AtomicU8 = AtomicU8::new(0);
+pub(crate) static HIGHEST_LIVE_LEVEL: AtomicU8 = AtomicU8::new(0);
 
-/// A lock that ignores poisoning: every value behind one stays consistent
-/// across a panic.
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -159,25 +151,21 @@ pub(crate) fn registry() -> MutexGuard<'static, Registry> {
 }
 
 impl Registry {
-    /// The name of a site.
     pub(crate) fn name(&self, site: u32) -> &'static str {
         self.sites[site as usize].name
     }
 
-    /// Adds a live context whose sites are active up to `max`.
     pub(crate) fn insert(&mut self, id: u64, max: Level, shared: Weak<Shared>) {
         self.contexts.push((id, max, shared));
-        MAX.fetch_max(max.0, Relaxed);
+        HIGHEST_LIVE_LEVEL.fetch_max(max.0, Relaxed);
     }
 
-    /// Removes a context and lowers [`MAX`] to the highest of the rest.
     pub(crate) fn remove(&mut self, id: u64) {
         self.contexts.retain(|c| c.0 != id);
         let max = self.contexts.iter().map(|c| c.1 .0).max();
-        MAX.store(max.unwrap_or(0), Relaxed);
+        HIGHEST_LIVE_LEVEL.store(max.unwrap_or(0), Relaxed);
     }
 
-    /// The context of `id` if it is alive.
     pub(crate) fn find(&self, id: u64) -> Option<Arc<Shared>> {
         self.contexts.iter().find(|c| c.0 == id)?.2.upgrade()
     }

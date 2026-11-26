@@ -1,6 +1,4 @@
 name: ci
-# One Linux job: fmt, clippy, the tests with and without the feature, and the
-# wasm32 build checked for imports (scripts/ci.sh).
 on:
   pull_request:
 jobs:
@@ -8,6 +6,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: milanofthe/negentropy@v1.2.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

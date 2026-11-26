@@ -2,6 +2,7 @@
 
 mod common;
 
+use common::constants::{NOISY_FIT, ROUND_OFF, WHOLE_NS};
 use common::{close, Gauss, Hand};
 use rsprobe::Param;
 use rsprobe_tool::fmt::path;
@@ -11,9 +12,6 @@ use rsprobe_tool::Run;
 
 const SIZES: [u64; 5] = [1000, 2000, 4000, 8000, 16000];
 
-/// Records over n: `lin` 100 n, `nlogn` 10 n ln n, `quad` n^2 / 10 and their
-/// sum at the root, each time times a normal factor of the given relative
-/// noise; `lin` adds n nonzeros.
 fn series(noise: f64, sizes: &[u64]) -> Vec<Run> {
     let mut g = Gauss::new(3);
     sizes
@@ -68,18 +66,18 @@ fn known_exponents() {
         let got = fit(&runs, node, "time");
         assert_eq!(got.2, q, "{node}");
         assert!(
-            close(got.1, e, 1e-3) && close(got.0 / c, 1.0, 1e-2) && got.3 < 1e-3,
+            close(got.1, e, WHOLE_NS) && close(got.0 / c, 1.0, WHOLE_NS) && got.3 < WHOLE_NS,
             "{node} {got:?}"
         );
     }
-    assert!(close(fit(&runs, "lin", "nonzeros").1, 1.0, 1e-7));
-    assert!(close(fit(&runs, "lin", "calls").1, 0.0, 1e-7));
+    assert!(close(fit(&runs, "lin", "nonzeros").1, 1.0, ROUND_OFF));
+    assert!(close(fit(&runs, "lin", "calls").1, 0.0, ROUND_OFF));
 }
 
 #[test]
 fn noisy_exponents() {
     let (_, e, q, res) = fit(&series(0.02, &SIZES), "quad", "time");
-    assert!(close(local_exponent(e, q, SIZES[4] as f64), 2.0, 0.05));
+    assert!(close(local_exponent(e, q, SIZES[4] as f64), 2.0, NOISY_FIT));
     assert!(res > 0.0);
 }
 
@@ -87,10 +85,12 @@ fn noisy_exponents() {
 fn departing_nodes_named() {
     let runs = series(0.0, &SIZES);
     let f = fits(&runs, "n").unwrap();
-    // quad, n^2 / 10, has the largest self time at n = 16000; the root is
-    // not a scope and not listed.
-    assert_eq!(f.dominant.as_ref().map(path), Some("quad".into()));
-    assert!(close(f.run.unwrap(), 2.0, 1e-3));
+    assert_eq!(
+        f.dominant.as_ref().map(path),
+        Some("quad".into()),
+        "quad has the largest self time at the largest n, and the root is not a scope"
+    );
+    assert!(close(f.run.unwrap(), 2.0, ROUND_OFF));
     assert_eq!(
         f.departs.iter().map(|d| path(&d.0)).collect::<Vec<_>>(),
         ["lin", "nlogn"]
@@ -112,8 +112,6 @@ fn missing_parameter() {
 
 #[test]
 fn known_serial_fraction() {
-    // T(t) = T1 (f + (1 - f) / t) with f = 0.1; pool t (T(t) - f T1) makes
-    // the waiting share 1 - (T - f T1) / T.
     let (t1, f) = (1e9, 0.1);
     let wall = |t: f64| t1 * (f + (1.0 - f) / t);
     let runs: Vec<Run> = [1.0, 2.0, 4.0, 8.0]
@@ -140,19 +138,15 @@ fn known_serial_fraction() {
     let got: Vec<_> = rows.iter().filter(|r| path(&r.0) == "par").collect();
     assert_eq!(got.iter().map(|r| r.1).collect::<Vec<_>>(), [2.0, 4.0, 8.0]);
     for (_, t, _, s, e, kf, w) in got {
-        assert!(close(*s, 1.0 / (f + (1.0 - f) / t), 1e-7));
-        assert!(close(*e, s / t, 1e-7));
-        assert!(close(*kf, f, 1e-7));
-        assert!(close(w.unwrap(), f * t1 / wall(*t), 1e-7));
+        assert!(close(*s, 1.0 / (f + (1.0 - f) / t), ROUND_OFF));
+        assert!(close(*e, s / t, ROUND_OFF));
+        assert!(close(*kf, f, ROUND_OFF));
+        assert!(close(w.unwrap(), f * t1 / wall(*t), ROUND_OFF));
     }
 }
 
 #[test]
 fn time_against_the_nodes_own_measure() {
-    // Runs of different kinds: per record `factor` takes 3 ns per nonzero at
-    // 2 percent noise, while `other` takes a time drawn independently of its
-    // ops; `rest` has no measure. The run's size (here n) does not order
-    // either.
     let mut g = Gauss::new(5);
     let mut rng = Rng::new(6);
     let runs: Vec<Run> = (0..12)
@@ -189,8 +183,8 @@ fn time_against_the_nodes_own_measure() {
         .find(|r| path(&r.0) == "factor" && r.1 == "time")
         .unwrap();
     assert_eq!(*k, 12);
-    assert!((e + *q as f64 / 1e5f64.ln() - 1.0).abs() < 0.05);
-    assert!(*res < 0.05);
+    assert!(close(e + *q as f64 / 1e5f64.ln(), 1.0, NOISY_FIT));
+    assert!(*res < NOISY_FIT);
     assert_eq!(
         r.poor.iter().map(|p| path(&p.0)).collect::<Vec<_>>(),
         ["other"]
