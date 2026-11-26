@@ -89,7 +89,7 @@ fn alloc_free(a: &impl GlobalAlloc, size: usize) {
     unsafe { a.dealloc(black_box(a.alloc(l)), l) }
 }
 
-fn median_ns_per_alloc_free_at_rising_peak() -> f64 {
+fn median_alloc_free_ns() -> f64 {
     let l = Layout::from_size_align(16, 8).unwrap();
     let mut held = Vec::with_capacity(ITERATIONS_PER_ROUND as usize);
     let mut v: Vec<f64> = (0..ROUNDS)
@@ -122,7 +122,7 @@ fn main() {
     }
     row(
         "alloc+free 16 B, Alloc, rising peak",
-        median_ns_per_alloc_free_at_rising_peak(),
+        median_alloc_free_ns(),
     );
     if cfg!(not(feature = "on")) {
         row("scope, feature off", median_ns_per_call(1, flat));
